@@ -1,0 +1,111 @@
+{
+  "test_session": {
+    "start_time": "2026-04-01T11:21:05.651026",
+    "test_video": "D:\\smart_cliping\\data\\output\\ANM_related\\solution_1_exploration\\segments\\segment_010.mp4",
+    "output_dir": "D:\\smart_cliping\\test_results",
+    "end_time": "2026-04-01T11:21:31.991401",
+    "summary": {
+      "total_tests": 4,
+      "successful": 3,
+      "failed": 1
+    }
+  },
+  "tests": [
+    {
+      "test_type": "vision_language",
+      "timestamp": "2026-04-01T11:21:15.129684",
+      "input_file": "C:\\Users\\EDY\\AppData\\Local\\Temp\\tmps8gfrfp9\\frame.jpg",
+      "fallback_chain": [
+        "qwen3-vl-flash",
+        "qwen3-vl-flash-2026-01-22",
+        "qwen-vl-plus",
+        "qwen-vl-max"
+      ],
+      "model_used": "qwen3-vl-flash",
+      "success": true,
+      "content": "室外自然场景，一只成年狒狒坐于岩石上，背景为稀疏灌木与嫩绿叶片。它正低头用右手挠面部或颈部，姿态放松。阳光柔和，画面宁静自然，传递出野生动物在栖息地日常休憩的平和氛围。",
+      "error": null,
+      "usage": {
+        "prompt_tokens": 2565,
+        "completion_tokens": 61,
+        "total_tokens": 2626,
+        "completion_tokens_details": {
+          "text_tokens": 61
+        },
+        "prompt_tokens_details": {
+          "image_tokens": 2481,
+          "text_tokens": 84,
+          "cached_tokens": 0
+        }
+      },
+      "elapsed_seconds": 3.669821
+    },
+    {
+      "test_type": "audio",
+      "timestamp": "2026-04-01T11:21:27.451566",
+      "input_file": "C:\\Users\\EDY\\AppData\\Local\\Temp\\tmps8gfrfp9\\audio.mp3",
+      "fallback_chain": [
+        "qwen-audio-turbo",
+        "qwen-audio-turbo-latest",
+        "qwen3-omni-flash",
+        "qwen3-omni-flash-2025-09-15",
+        "qwen3-omni-flash-2025-12-01",
+        "qwen3-omni-flash-realtime"
+      ],
+      "model_used": null,
+      "success": false,
+      "content": "",
+      "error": "Model qwen3-omni-flash-realtime error: 400 - {\"error\":{\"message\":\"Invalid value: audio_url. Supported values are: 'text','image_url','video_url' and 'video'.\",\"type\":\"invalid_request_error\",\"param\":\"'messages.[0].content[1].type'\",\"code\":\"invalid_value\"},\"request_id\":\"chatcmpl-1e7f509b-02a3-9d55-8d9d-7ee89ff69fa1\"}",
+      "usage": null,
+      "elapsed_seconds": 12.316535
+    },
+    {
+      "test_type": "text",
+      "timestamp": "2026-04-01T11:21:30.528558",
+      "fallback_chain": [
+        "qwen3-max",
+        "qwen3-max-preview",
+        "qwen3-max-2025-09-23",
+        "qwen3-max-2026-01-23",
+        "qwen-flash",
+        "qwen-flash-2025-07-28",
+        "qwen3.5-flash"
+      ],
+      "model_used": "qwen3-max",
+      "success": true,
+      "content": "视频精彩片段提取是指从完整视频中自动识别并截取最具吸引力、关键或高价值的片段，如高潮、进球、爆点等内容。",
+      "error": null,
+      "usage": {
+        "completion_tokens": 33,
+        "prompt_tokens": 32,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 65
+      },
+      "elapsed_seconds": 3.070904
+    },
+    {
+      "test_type": "fast_text",
+      "timestamp": "2026-04-01T11:21:31.989344",
+      "fallback_chain": [
+        "qwen-flash",
+        "qwen-flash-2025-07-28",
+        "qwen3.5-flash"
+      ],
+      "model_used": "qwen-flash",
+      "success": true,
+      "content": "1. 天气  \n2. 阳光  \n3. 散步",
+      "error": null,
+      "usage": {
+        "completion_tokens": 18,
+        "prompt_tokens": 40,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 58
+      },
+      "elapsed_seconds": 1.458306
+    }
+  ]
+}

@@ -1,0 +1,117 @@
+{
+  "test_session": {
+    "start_time": "2026-04-01T15:24:57.820164",
+    "test_video": "D:\\smart_cliping\\data\\output\\ANM_related\\solution_1_exploration\\segments\\segment_010.mp4",
+    "output_dir": "D:\\smart_cliping\\test_results",
+    "end_time": "2026-04-01T15:25:19.333934",
+    "summary": {
+      "total_tests": 4,
+      "successful": 4,
+      "failed": 0
+    }
+  },
+  "tests": [
+    {
+      "test_type": "vision_language",
+      "timestamp": "2026-04-01T15:25:09.009669",
+      "input_file": "C:\\Users\\EDY\\AppData\\Local\\Temp\\tmpnj_1agr8\\frame.jpg",
+      "fallback_chain": [
+        "qwen3-vl-plus",
+        "qwen3-vl-flash",
+        "qwen3-vl-flash-2026-01-22",
+        "qwen-vl-plus",
+        "qwen-vl-max",
+        "qwen3.5-vl-plus"
+      ],
+      "model_used": "qwen3-vl-plus",
+      "success": true,
+      "content": "室外自然环境，一只成年狒狒坐于火山岩上，背景为稀疏灌木。它低头凝视，神情专注，似在觅食或观察。阳光柔和，氛围宁静而警觉，体现野生动物在栖息地的日常状态。",
+      "error": null,
+      "usage": {
+        "prompt_tokens": 2565,
+        "completion_tokens": 57,
+        "total_tokens": 2622,
+        "completion_tokens_details": {
+          "text_tokens": 57
+        },
+        "prompt_tokens_details": {
+          "image_tokens": 2481,
+          "text_tokens": 84,
+          "cached_tokens": 0
+        }
+      },
+      "elapsed_seconds": 5.764987
+    },
+    {
+      "test_type": "audio",
+      "timestamp": "2026-04-01T15:25:13.494497",
+      "input_file": "C:\\Users\\EDY\\AppData\\Local\\Temp\\tmpnj_1agr8\\audio.mp3",
+      "fallback_chain": [
+        "qwen-audio-turbo",
+        "qwen-audio-turbo-latest",
+        "qwen3-omni-flash",
+        "qwen3-omni-flash-2025-09-15",
+        "qwen3-omni-flash-2025-12-01",
+        "qwen3-omni-flash-realtime"
+      ],
+      "model_used": "qwen-audio-turbo",
+      "success": true,
+      "content": "这段音频主要由人声和音乐组成。人声部分是一位男性用英语讲述，内容涉及狒狒的生存策略，强调了它们的力量不在于肌肉，而在于群体间的紧密联系。音乐部分贯穿始终，营造出一种紧张而神秘的氛围。整体上，这段音频给人一种紧张且充满悬念的感觉。",
+      "error": null,
+      "usage": {
+        "audio_tokens": 404,
+        "input_tokens": 490,
+        "output_tokens": 68
+      },
+      "elapsed_seconds": 4.482618
+    },
+    {
+      "test_type": "text",
+      "timestamp": "2026-04-01T15:25:16.902502",
+      "fallback_chain": [
+        "qwen3-max",
+        "qwen3-max-preview",
+        "qwen3-max-2025-09-23",
+        "qwen3-max-2026-01-23",
+        "qwen-flash",
+        "qwen-flash-2025-07-28",
+        "qwen3.5-flash"
+      ],
+      "model_used": "qwen3-max",
+      "success": true,
+      "content": "视频精彩片段提取是指从完整视频中自动识别并截取最具代表性、吸引力或关键信息的高光片段。",
+      "error": null,
+      "usage": {
+        "completion_tokens": 26,
+        "prompt_tokens": 32,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 58
+      },
+      "elapsed_seconds": 3.404473
+    },
+    {
+      "test_type": "fast_text",
+      "timestamp": "2026-04-01T15:25:19.330600",
+      "fallback_chain": [
+        "qwen-flash",
+        "qwen-flash-2025-07-28",
+        "qwen3.5-flash"
+      ],
+      "model_used": "qwen-flash",
+      "success": true,
+      "content": "1. 天气  \n2. 阳光  \n3. 散步",
+      "error": null,
+      "usage": {
+        "completion_tokens": 18,
+        "prompt_tokens": 40,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 58
+      },
+      "elapsed_seconds": 2.422997
+    }
+  ]
+}

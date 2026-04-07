@@ -1,0 +1,73 @@
+{
+  "test_session": {
+    "start_time": "2026-04-01T11:17:42.300559",
+    "test_video": "D:\\smart_cliping\\data\\output\\ANM_related\\solution_1_exploration\\segments\\segment_010.mp4",
+    "output_dir": "D:\\smart_cliping\\test_results",
+    "end_time": "2026-04-01T11:17:48.586795",
+    "summary": {
+      "total_tests": 4,
+      "successful": 2,
+      "failed": 2
+    }
+  },
+  "tests": [
+    {
+      "test_type": "vision_language",
+      "success": false,
+      "error": "Frame extraction failed"
+    },
+    {
+      "test_type": "audio",
+      "success": false,
+      "error": "Audio extraction failed"
+    },
+    {
+      "test_type": "text",
+      "timestamp": "2026-04-01T11:17:45.691652",
+      "fallback_chain": [
+        "qwen3-max",
+        "qwen3-max-preview",
+        "qwen3-max-2025-09-23",
+        "qwen3-max-2026-01-23",
+        "qwen-flash",
+        "qwen-flash-2025-07-28",
+        "qwen3.5-flash"
+      ],
+      "model_used": "qwen3-max",
+      "success": true,
+      "content": "视频精彩片段提取是指从完整视频中自动识别并截取最具代表性、吸引力或关键信息的高光片段。",
+      "error": null,
+      "usage": {
+        "completion_tokens": 26,
+        "prompt_tokens": 32,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 58
+      },
+      "elapsed_seconds": 3.35995
+    },
+    {
+      "test_type": "fast_text",
+      "timestamp": "2026-04-01T11:17:48.585555",
+      "fallback_chain": [
+        "qwen-flash",
+        "qwen-flash-2025-07-28",
+        "qwen3.5-flash"
+      ],
+      "model_used": "qwen-flash",
+      "success": true,
+      "content": "1. 天气  \n2. 阳光  \n3. 散步",
+      "error": null,
+      "usage": {
+        "completion_tokens": 18,
+        "prompt_tokens": 40,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "total_tokens": 58
+      },
+      "elapsed_seconds": 2.891683
+    }
+  ]
+}

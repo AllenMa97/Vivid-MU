@@ -1,0 +1,20 @@
+{
+  "test_session": {
+    "start_time": "2026-04-01T15:16:24.737801",
+    "test_video": "D:\\smart_cliping\\data\\output\\ANM_related\\solution_1_exploration\\segments\\segment_010.mp4",
+    "output_dir": "D:\\smart_cliping\\test_results",
+    "end_time": "2026-04-01T15:16:29.590659",
+    "summary": {
+      "total_tests": 1,
+      "successful": 0,
+      "failed": 1
+    }
+  },
+  "tests": [
+    {
+      "test_type": "video",
+      "success": false,
+      "error": "Failed to compress video"
+    }
+  ]
+}

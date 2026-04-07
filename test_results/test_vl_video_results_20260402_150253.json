@@ -1,0 +1,46 @@
+{
+  "test_session": {
+    "start_time": "2026-04-02T15:02:35.660303",
+    "test_video": "D:\\smart_cliping\\data\\output\\ANM_related\\solution_1_exploration\\segments\\segment_010.mp4",
+    "output_dir": "D:\\smart_cliping\\test_results",
+    "end_time": "2026-04-02T15:02:53.054320",
+    "summary": {
+      "total_tests": 1,
+      "successful": 1,
+      "failed": 0
+    }
+  },
+  "tests": [
+    {
+      "test_type": "vl_video",
+      "timestamp": "2026-04-02T15:02:53.049102",
+      "input_file": "C:\\Users\\EDY\\AppData\\Local\\Temp\\tmp0yq2ix4n\\compressed_video.mp4",
+      "fallback_chain": [
+        "qwen3-vl-plus",
+        "qwen3-vl-flash",
+        "qwen3-vl-flash-2026-01-22",
+        "qwen-vl-plus",
+        "qwen-vl-max",
+        "qwen3.5-vl-plus"
+      ],
+      "model_used": "qwen3-vl-plus",
+      "success": true,
+      "content": "该视频聚焦于狒狒群体的野外活动：开篇特写雄性狒狒警觉神态，随后展现群体在岩壁攀爬、疾行与草甸穿行的动态场景；画面以自然光为主，色调温暖；无对白，配环境音效（脚步声、风声）与舒缓纪录片配乐；氛围紧张而真实，节奏由静至动；叙事呈线性观察式，无明显转折，突出狒狒适应崎岖环境的生存能力。（149字）",
+      "error": null,
+      "usage": {
+        "prompt_tokens": 9606,
+        "completion_tokens": 114,
+        "total_tokens": 9720,
+        "completion_tokens_details": {
+          "text_tokens": 114
+        },
+        "prompt_tokens_details": {
+          "text_tokens": 100,
+          "video_tokens": 9506,
+          "cached_tokens": 0
+        }
+      },
+      "elapsed_seconds": 8.320664
+    }
+  ]
+}

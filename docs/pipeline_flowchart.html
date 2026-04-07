@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VividMU - 视频精彩片段提取系统</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 100%);
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            color: #fff;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            color: #00d4ff;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        .flowchart-section {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            padding: 15px;
+            overflow-x: auto;
+        }
+        .model-info {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .model-info h3 {
+            color: #00d4ff;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        .model-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 15px;
+        }
+        .model-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 15px;
+            border-left: 3px solid;
+        }
+        .model-card.vlvm { border-color: #a29bfe; }
+        .model-card.audio { border-color: #fd79a8; }
+        .model-card.llm { border-color: #00b894; }
+        .model-card.mllm { border-color: #74b9ff; }
+        .model-card.video { border-color: #f9ca24; }
+        .model-type {
+            font-weight: bold;
+            margin-bottom: 8px;
+            font-size: 1.1em;
+        }
+        .model-card.vlvm .model-type { color: #a29bfe; }
+        .model-card.audio .model-type { color: #fd79a8; }
+        .model-card.llm .model-type { color: #00b894; }
+        .model-card.mllm .model-type { color: #74b9ff; }
+        .model-card.video .model-type { color: #f9ca24; }
+        .model-list {
+            color: #aaa;
+            font-size: 0.9em;
+            line-height: 1.6;
+        }
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            margin-top: 15px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9em;
+        }
+        .legend-color {
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+        }
+        .step3-note {
+            background: rgba(249, 202, 36, 0.1);
+            border: 1px solid rgba(249, 202, 36, 0.3);
+            border-radius: 8px;
+            padding: 10px 15px;
+            margin-top: 10px;
+            color: #f9ca24;
+            font-size: 0.9em;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>VividMU</h1>
+        <div class="subtitle">视频精彩片段提取系统 - 端到端流程</div>
+        
+        <div class="flowchart-section">
+            <div class="mermaid">
+flowchart TB
+    subgraph INPUT["输入模块"]
+        VIDEO["原始视频文件"]
+    end
+
+    subgraph STEP1["Step 1: 传统CV/音频特征过滤"]
+        subgraph PREPROC["预处理"]
+            COMPRESS["视频压缩<br/>降低分辨率以加速处理"]
+        end
+        
+        subgraph COARSE["粗筛选层"]
+            DHASH["dHash感知哈希<br/>去除重复帧"]
+            OPTICAL["光流分析<br/>检测运动强度"]
+            AUDIO_EN["音频能量检测<br/>识别静音片段"]
+            C_MERGE["综合评分过滤"]
+        end
+        
+        subgraph FINE["细筛选层"]
+            FACE["人脸检测<br/>MTCNN"]
+            SCENE["场景分类<br/>图像特征分析"]
+            STABILITY["稳定性评分<br/>帧间差异"]
+            F_MERGE["综合评分排序"]
+        end
+        
+        subgraph SEGMENT["片段生成"]
+            CUT["视频切割<br/>按原分辨率输出"]
+        end
+    end
+
+    subgraph STEP2["Step 2: AI语义分析筛选"]
+        subgraph EXTRACT["特征提取"]
+            FRAME["关键帧提取"]
+            AUDIO_EX["音频提取"]
+        end
+        
+        subgraph AI["多模态AI分析 (含自动回退机制)"]
+            VL["LVLM<br/>视觉理解"]
+            AU["Audio LLM<br/>音频理解"]
+            TX["LLM<br/>综合筛选"]
+        end
+        
+        subgraph SELECT["片段选择"]
+            SCHEME["多方案生成<br/>精彩/叙事/氛围"]
+        end
+    end
+
+    subgraph STEP3["Step 3: 视频生成"]
+        KLING["视频生成模型<br/>提示词模板注入素材片段"]
+        FINAL["最终视频输出"]
+    end
+
+    VIDEO --> COMPRESS
+    COMPRESS --> DHASH
+    COMPRESS --> OPTICAL
+    COMPRESS --> AUDIO_EN
+    DHASH --> C_MERGE
+    OPTICAL --> C_MERGE
+    AUDIO_EN --> C_MERGE
+    C_MERGE --> FACE
+    C_MERGE --> SCENE
+    C_MERGE --> STABILITY
+    FACE --> F_MERGE
+    SCENE --> F_MERGE
+    STABILITY --> F_MERGE
+    F_MERGE --> CUT
+    CUT --> FRAME
+    CUT --> AUDIO_EX
+    FRAME --> VL
+    AUDIO_EX --> AU
+    VL --> TX
+    AU --> TX
+    TX --> SCHEME
+    SCHEME --> KLING
+    KLING --> FINAL
+
+    style VIDEO fill:#ff6b6b,stroke:#fff,color:#fff
+    style COMPRESS fill:#4ecdc4,stroke:#fff,color:#fff
+    style C_MERGE fill:#45b7d1,stroke:#fff,color:#fff
+    style F_MERGE fill:#96ceb4,stroke:#fff,color:#fff
+    style CUT fill:#f9ca24,stroke:#333,color:#333
+    style VL fill:#a29bfe,stroke:#fff,color:#fff
+    style AU fill:#fd79a8,stroke:#fff,color:#fff
+    style TX fill:#00b894,stroke:#fff,color:#fff
+    style KLING fill:#e17055,stroke:#fff,color:#fff
+    style FINAL fill:#ffeaa7,stroke:#333,color:#333
+            </div>
+        </div>
+        
+        <div class="step3-note">
+            Step 3 通过设计不同的提示词模板，向 Kling 等视频剪辑AI供应商注入素材片段，生成不同风格的最终视频
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #ff6b6b;"></div>
+                <span>输入/输出</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #4ecdc4;"></div>
+                <span>预处理</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #45b7d1;"></div>
+                <span>粗筛选</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #96ceb4;"></div>
+                <span>细筛选</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #a29bfe;"></div>
+                <span>LVLM</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #fd79a8;"></div>
+                <span>Audio LLM</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #00b894;"></div>
+                <span>LLM</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #e17055;"></div>
+                <span>视频生成</span>
+            </div>
+        </div>
+        
+        <div class="model-info">
+            <h3>支持的模型列表</h3>
+            <div class="model-grid">
+                <div class="model-card vlvm">
+                    <div class="model-type">LVLM (视觉语言模型)</div>
+                    <div class="model-list">
+                        支持: Qwen-VL-Flash, Qwen-VL-Plus, Qwen-VL-Max, GLM-4V
+                    </div>
+                </div>
+                <div class="model-card audio">
+                    <div class="model-type">Audio LLM (音频语言模型)</div>
+                    <div class="model-list">
+                        支持: Qwen-Audio-Turbo, Qwen-Audio-Latest, Qwen2-Audio
+                    </div>
+                </div>
+                <div class="model-card llm">
+                    <div class="model-type">LLM (大语言模型)</div>
+                    <div class="model-list">
+                        支持: Qwen-Max, Qwen-Flash, Qwen3.5-Flash, GLM-4, DeepSeek
+                    </div>
+                </div>
+                <div class="model-card video">
+                    <div class="model-type">视频生成模型</div>
+                    <div class="model-list">
+                        支持: Kling AI (API待开放), Runway Gen-3, Sora
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'dark',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis',
+                rankSpacing: 40,
+                nodeSpacing: 25
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+venv/
+env/
+ENV/
+
+# Virtual Environment
+python_env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+.directory
+*.nfs*
+.trashes
+
+# Logs
+logs/
+*.log
+
+# Data
+data/input/
+data/output/
+
+# Configuration and API Keys
+user_config.txt
+config.json
+*.key
+*.token
+*.secret
+.env
+secrets.json
+credentials.json
+api_keys.json
+tokens.json
+access_tokens.json
+refresh_tokens.json
+
+# Models and Cache
+models/
+.cache/
+*.model
+*.pb
+*.onnx
+*.pth
+*.ckpt
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+temp/
+
+# System files
+.DS_Store
+desktop.ini
+
+# FFmpeg temp files
+*.ffidx
+*.ffmeta
+
+# User-specific files
+*.user
+*.local

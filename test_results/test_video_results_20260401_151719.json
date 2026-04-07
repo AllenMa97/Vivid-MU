@@ -1,0 +1,35 @@
+{
+  "test_session": {
+    "start_time": "2026-04-01T15:17:06.982176",
+    "test_video": "D:\\smart_cliping\\data\\output\\ANM_related\\solution_1_exploration\\segments\\segment_010.mp4",
+    "output_dir": "D:\\smart_cliping\\test_results",
+    "end_time": "2026-04-01T15:17:19.634012",
+    "summary": {
+      "total_tests": 1,
+      "successful": 1,
+      "failed": 0
+    }
+  },
+  "tests": [
+    {
+      "test_type": "video",
+      "timestamp": "2026-04-01T15:17:19.629273",
+      "input_file": "D:\\smart_cliping\\data\\output\\ANM_related\\solution_1_exploration\\segments\\segment_010.mp4",
+      "fallback_chain": [
+        "qwen3.5-omni-plus",
+        "qwen3-omni-flash",
+        "qwen3.5-omni-max",
+        "qwen3.5-omni-turbo",
+        "qwen3-omni-flash-2025-09-15",
+        "qwen3-omni-flash-2025-12-01",
+        "qwen3-omni-flash-realtime"
+      ],
+      "model_used": "qwen3-omni-flash",
+      "success": true,
+      "content": "视频聚焦狒狒群在非洲草原与岩壁间迁徙，展现其敏捷与群体协作。镜头切换于灌木、岩石与草地，突出自然环境。旁白强调其生存智慧非靠肌肉，而在团结。画面节奏舒缓，氛围野性而宁静，无激烈冲突，以自然生态之美收尾。",
+      "error": null,
+      "usage": null,
+      "elapsed_seconds": 5.27491
+    }
+  ]
+}

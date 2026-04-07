@@ -53,6 +53,7 @@ data/output/
 
 # Configuration and API Keys
 user_config.txt
+config.txt
 config.json
 *.key
 *.token

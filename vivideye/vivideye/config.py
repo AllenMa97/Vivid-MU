@@ -1,4 +1,8 @@
-"""Unified configuration loader for VividEye.
+"""Unified configuration loader for VividEye (PHONE-FIRST).
+
+All runtime components (capture, pipeline, AI orchestration, web server)
+run on the phone itself inside Termux. The PC only performs one-shot
+deployment.
 
 Usage:
     from vivideye.config import config
@@ -19,7 +23,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-import yaml
+try:
+    import yaml
+except ImportError:  # allow importing config before deps installed
+    yaml = None
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -27,38 +34,40 @@ DEFAULTS: dict[str, Any] = {
     "app": {
         "name": "VividEye",
         "language": "zh_CN",           # zh_CN | en_US
-        "data_dir": "data",            # relative to repo root
+        "data_dir": "data",            # relative to repo root (on the phone)
     },
     # ------------------------------------------------------------------
-    # Phone / camera capture
+    # Phone capture: loopback stream from an IP-camera app on the SAME phone
     # ------------------------------------------------------------------
     "capture": {
-        "source_url": "http://192.168.1.100:8080/video",  # MJPEG/RTSP/HLS from phone app
-        "segment_seconds": 600,        # split rolling recording into N-second files
+        "source_url": "http://127.0.0.1:8080/video",   # loopback MJPEG
+        "audio_url": "http://127.0.0.1:8080/audio.wav",
         "record_audio": True,
-        "video_codec": "copy",         # copy | h264 (re-encode if source is unstable)
+        "segment_seconds": 600,        # one file per 10 minutes
+        "video_codec": "copy",         # copy | h264
         "retention_hours": 72,         # raw segments older than this are deleted
         "restart_on_failure": True,
+        "watchdog_seconds": 60,        # recorder restart threshold
     },
     # ------------------------------------------------------------------
-    # Pipeline (inherited from VividMU 3-step flow)
+    # Pipeline (VividMU-derived; heavy inference offloaded to cloud APIs)
     # ------------------------------------------------------------------
     "pipeline": {
         "run_interval_minutes": 30,    # how often new raw segments are processed
-        "max_segments_per_run": 24,
+        "max_segments_per_run": 8,     # phone-friendly batch size
         "min_highlight_score": 0.55,
         "scene_mode": "auto",          # auto | pet | kid | home
+        "local_nn_enabled": False,     # local ONNX/YOLO inference (P20: keep off)
+        "sample_fps": 0.5,             # frames per second sent to cloud VLM
         "step1": {"enabled": True},
         "step2": {
             "enabled": True,
-            "yolo_enabled": True,
-            "yolo_conf": 0.25,
-            "device_policy": "yolo:auto,clip:auto,vad:cpu,face:auto",
+            "yolo_enabled": False,     # cloud VLM replaces on-device YOLO
         },
         "step3": {"enabled": True},
     },
     # ------------------------------------------------------------------
-    # AI capabilities
+    # AI capabilities (online APIs; the phone is the eye, cloud is the brain)
     # ------------------------------------------------------------------
     "ai": {
         "provider": "dashscope",       # dashscope | openai | compatible
@@ -70,8 +79,7 @@ DEFAULTS: dict[str, Any] = {
         "fast_model": "qwen-flash",
         "request_timeout": 60,
         "max_retries": 3,
-        "max_concurrent_requests": 5,
-        # online generation APIs (image / audio / video)
+        "max_concurrent_requests": 3,
         "image_gen_enabled": True,
         "audio_gen_enabled": True,
         "video_gen_enabled": False,    # heavy; off by default
@@ -84,14 +92,15 @@ DEFAULTS: dict[str, Any] = {
         "highlights_dir": "data/highlights",
         "raw_dir": "data/raw",
         "digest_dir": "data/digests",
+        "min_free_gb": 2,              # pause recording below this free space
     },
     # ------------------------------------------------------------------
-    # Web server
+    # Web server (runs on the phone; LAN devices browse to it)
     # ------------------------------------------------------------------
     "server": {
         "host": "0.0.0.0",
         "port": 8666,
-        "live_stream_proxy": True,     # proxy the phone stream so the UI shows live view
+        "live_stream_proxy": True,     # proxy camera stream for UI live view
     },
 }
 
@@ -158,6 +167,8 @@ def load_config(config_file: str | Path | None = None) -> Config:
     ]
     for c in candidates:
         if c and Path(c).is_file():
+            if yaml is None:
+                break
             with open(c, "r", encoding="utf-8") as f:
                 user = yaml.safe_load(f) or {}
             data = _deep_merge(data, user)

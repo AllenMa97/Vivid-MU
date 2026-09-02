@@ -1,41 +1,51 @@
 # ======================================================================
-# VividEye configuration template
+# VividEye configuration template  (PHONE-FIRST: everything runs on the
+# Huawei P20 itself; the PC is only used for one-shot deployment)
+#
 # Copy to user_config.yaml and adjust. user_config.yaml is git-ignored.
-# Every key here can also be overridden by env vars:
+# Every key can also be overridden by env vars:
 #   VIVIDEYE_AI__API_KEY  ->  ai.api_key   ("__" = nesting level)
 # ======================================================================
 
 app:
   name: VividEye
   language: zh_CN          # zh_CN | en_US
-  data_dir: data
+  data_dir: data           # relative to project root on the phone
 
 # ---------------------------------------------------------------------
-# Phone camera capture (P20 running an IP-camera app, e.g. IP Webcam)
+# Capture — the phone records ITSELF via a local IP-camera app
+# (e.g. "IP Webcam" / "DroidCam"), ffmpeg in Termux pulls the loopback
+# stream and writes rolling segments.
 # ---------------------------------------------------------------------
 capture:
-  source_url: http://192.168.1.100:8080/video   # MJPEG stream from the phone
-  segment_seconds: 600        # one file per 10 minutes
+  source_url: http://127.0.0.1:8080/video   # loopback MJPEG from the camera app
   record_audio: true
-  video_codec: copy           # copy | h264
+  audio_url: http://127.0.0.1:8080/audio.wav  # optional separate audio stream
+  segment_seconds: 600        # one file per 10 minutes
+  video_codec: copy           # copy | h264 (h264 if source is unstable)
   retention_hours: 72         # delete raw files older than 3 days
   restart_on_failure: true
+  watchdog_seconds: 60        # restart recorder if no new file appears
 
 # ---------------------------------------------------------------------
-# VividMU-derived pipeline
+# Pipeline (VividMU-derived, but inference is OFFLOADED to cloud APIs;
+# the phone only samples frames/audio and orchestrates)
 # ---------------------------------------------------------------------
 pipeline:
   run_interval_minutes: 30
-  max_segments_per_run: 24
+  max_segments_per_run: 8     # keep small: phone CPU/battery friendly
   min_highlight_score: 0.55
   scene_mode: auto            # auto | pet | kid | home
+  local_nn_enabled: false     # local ONNX/YOLO inference (NOT recommended on P20)
+  sample_fps: 0.5             # frames per second sent to cloud VLM
   step2:
-    yolo_enabled: true
-    yolo_conf: 0.25
-    device_policy: "yolo:auto,clip:auto,vad:cpu,face:auto"
+    yolo_enabled: false       # cloud VLM replaces on-device YOLO
+  step3:
+    enabled: true
 
 # ---------------------------------------------------------------------
-# AI capabilities (online LLM / VLM / generation APIs)
+# AI capabilities (online LLM / VLM / generation APIs) — the phone's
+# "brain" lives in the cloud; the phone is the "eyes".
 # ---------------------------------------------------------------------
 ai:
   provider: dashscope         # dashscope | openai | compatible
@@ -45,9 +55,15 @@ ai:
   audio_model: qwen-audio-turbo
   text_model: qwen3-max
   fast_model: qwen-flash
+  # 可选：模型回退链（逗号分隔或列表）。主模型失败时依次降级尝试；
+  # 不配置则使用内置默认链。文生图另支持 ai.image_model / ai.image_model_fallbacks。
+  # vision_model_fallbacks: qwen-vl-plus,qwen-vl-max
+  # audio_model_fallbacks: qwen2-audio-instruct
+  # text_model_fallbacks: qwen-plus,qwen-turbo
+  # fast_model_fallbacks: qwen-turbo
   request_timeout: 60
   max_retries: 3
-  max_concurrent_requests: 5
+  max_concurrent_requests: 3  # phone-friendly concurrency
   image_gen_enabled: true
   audio_gen_enabled: true
   video_gen_enabled: false
@@ -57,8 +73,9 @@ storage:
   highlights_dir: data/highlights
   raw_dir: data/raw
   digest_dir: data/digests
+  min_free_gb: 2              # pause recording when free space drops below
 
 server:
-  host: 0.0.0.0
+  host: 0.0.0.0               # serve on LAN; open http://<phone-ip>:8666
   port: 8666
-  live_stream_proxy: true
+  live_stream_proxy: true     # UI live view proxied from the camera app

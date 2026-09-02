@@ -1,0 +1,587 @@
+/* ============================================================
+ * VividEye 前端应用（纯原生 JavaScript，无框架、无 CDN 依赖）
+ * ------------------------------------------------------------
+ * 四个底部 Tab：高光墙 / 实时画面 / 日报 / 设置
+ * 数据接口：/api/status /api/highlights /api/digest
+ *          /api/config /api/live /api/pipeline/run
+ * ============================================================ */
+
+'use strict';
+
+/* ---------- DOM 快捷选择 ---------- */
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+/* ---------- 全局状态 ---------- */
+const state = {
+  tab: 'highlights',      // 当前 Tab
+  items: [],               // 已加载的高光列表
+  offset: 0,               // 分页偏移
+  limit: 24,               // 单页条数
+  hasMore: false,          // 是否还有更多
+  favoriteOnly: false,     // 仅看收藏
+  loading: false,          // 防重复加载
+  current: null,          // 播放弹层当前高光（state.items 内的引用）
+  digestDate: todayStr(), // 日报日期
+  cfg: null,               // /api/config 返回（密钥已打码）
+};
+
+/* ============================================================
+ * 通用工具函数
+ * ============================================================ */
+
+/** 本地时区的今天，格式 YYYY-MM-DD */
+function todayStr() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** fetch JSON 包装：统一错误提示 */
+async function fetchJSON(url, options = {}) {
+  const resp = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  });
+  let data = null;
+  try { data = await resp.json(); } catch (_) { /* 非 JSON 响应体 */ }
+  if (!resp.ok) {
+    const msg = (data && (data.detail || data.message)) || `请求失败（${resp.status}）`;
+    throw new Error(msg);
+  }
+  return data;
+}
+
+/** 秒 → "m:ss"（超过 1 小时则 "h:mm:ss"） */
+function fmtClock(sec) {
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const mm = String(m).padStart(2, '0');
+  const ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}
+
+/** 时间戳 → 今天显示 "14:30"，其他天显示 "9月1日 14:30" */
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return d.toDateString() === now.toDateString()
+    ? hm
+    : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+}
+
+/** 字节数 → 人类可读 */
+function fmtBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(1) + ' GB';
+  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(0) + ' MB';
+  return (n / 1024).toFixed(0) + ' KB';
+}
+
+/** HTML 转义（所有后端内容渲染前必须经过它） */
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** 轻提示 toast */
+let toastTimer = null;
+function toast(msg, ms = 2400) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add('hidden'), ms);
+}
+
+/* ============================================================
+ * 极简 Markdown 渲染器（内置实现，离线可用）
+ * 覆盖日报用到的语法：标题/粗斜体/行内代码/有序无序列表/
+ * 引用/分割线/链接/代码块
+ * ============================================================ */
+function renderMarkdown(md) {
+  const lines = String(md || '').replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let i = 0;
+
+  /** 行内元素：转义后再做富文本替换 */
+  const inline = (s) => {
+    s = esc(s);
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
+    s = s.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener">$1</a>',
+    );
+    return s;
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (!line.trim()) { i++; continue; } // 空行：段落分隔
+
+    if (line.startsWith('```')) {          // 围栏代码块
+      const buf = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith('```')) buf.push(lines[i++]);
+      i++; // 跳过收尾 ```
+      out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`);
+      continue;
+    }
+
+    const m = line.match(/^(#{1,6})\s+(.*)$/); // 标题
+    if (m) {
+      const lv = m[1].length;
+      out.push(`<h${lv}>${inline(m[2])}</h${lv}>`);
+      i++;
+      continue;
+    }
+
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { // 分割线
+      out.push('<hr>');
+      i++;
+      continue;
+    }
+
+    if (/^\s*>/.test(line)) {              // 引用块（连续行合并）
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) {
+        buf.push(lines[i++].replace(/^\s*>\s?/, ''));
+      }
+      out.push(`<blockquote>${buf.map(inline).join('<br>')}</blockquote>`);
+      continue;
+    }
+
+    if (/^\s*[-*+]\s+/.test(line)) {       // 无序列表
+      const buf = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+        buf.push(lines[i++].replace(/^\s*[-*+]\s+/, ''));
+      }
+      out.push(`<ul>${buf.map((x) => `<li>${inline(x)}</li>`).join('')}</ul>`);
+      continue;
+    }
+
+    if (/^\s*\d+[.、)]\s+/.test(line)) {   // 有序列表
+      const buf = [];
+      while (i < lines.length && /^\s*\d+[.、)]\s+/.test(lines[i])) {
+        buf.push(lines[i++].replace(/^\s*\d+[.、)]\s+/, ''));
+      }
+      out.push(`<ol>${buf.map((x) => `<li>${inline(x)}</li>`).join('')}</ol>`);
+      continue;
+    }
+
+    // 普通段落：连续非格式行合并，单换行转 <br>
+    const buf = [line];
+    i++;
+    while (i < lines.length && lines[i].trim() &&
+           !/^(#{1,6}\s|```|\s*>|\s*[-*+]\s|\s*\d+[.、)]\s)/.test(lines[i])) {
+      buf.push(lines[i++]);
+    }
+    out.push(`<p>${buf.map(inline).join('<br>')}</p>`);
+  }
+  return out.join('\n');
+}
+
+/* ============================================================
+ * 顶部状态栏
+ * ============================================================ */
+async function loadStatus() {
+  try {
+    const s = await fetchJSON('/api/status');
+
+    // 录制状态灯
+    const rec = s.recording || {};
+    $('#record-dot').classList.toggle('on', !!rec.recording);
+    $('#record-text').textContent = rec.recording ? '录制中' : '待机';
+    $('#chip-record').classList.toggle('rec', !!rec.recording);
+
+    // 今日高光数 / 磁盘
+    const today = (s.db && s.db.highlights_today) || 0;
+    $('#chip-today').textContent = `今日 ✨ ${today}`;
+    $('#chip-disk').textContent = `💾 ${fmtBytes(s.disk_free)}`;
+
+    // pipeline 状态（设置页展示）
+    const p = s.pipeline || {};
+    const ps = $('#pipeline-status');
+    if (p.running) ps.textContent = '⏳ 处理任务进行中…';
+    else if (p.last_run_str) {
+      ps.textContent = `上次处理：${p.last_run_str}` + (p.last_error ? ' · 上次出错' : '');
+    } else {
+      ps.textContent = p.available ? '还没有处理记录' : 'pipeline 模块未部署';
+    }
+  } catch (_) {
+    /* 状态获取失败静默处理，不打扰用户 */
+  }
+}
+
+/* ============================================================
+ * 高光墙
+ * ============================================================ */
+
+/** 拉取高光列表（reset=true 重置分页） */
+async function loadHighlights(reset = false) {
+  if (state.loading) return;
+  state.loading = true;
+  if (reset) { state.offset = 0; state.items = []; }
+
+  const params = new URLSearchParams({
+    limit: String(state.limit),
+    offset: String(state.offset),
+    favorite: state.favoriteOnly ? 'true' : 'false',
+  });
+  try {
+    const data = await fetchJSON(`/api/highlights?${params}`);
+    const items = data.items || [];
+    state.items = reset ? items : state.items.concat(items);
+    state.hasMore = items.length >= state.limit;
+    renderHighlights();
+  } catch (e) {
+    toast('加载高光失败：' + e.message);
+  } finally {
+    state.loading = false;
+  }
+}
+
+/** 渲染高光墙（网格 + 空状态 + 加载更多） */
+function renderHighlights() {
+  $('#hl-grid').innerHTML = state.items.map(cardHTML).join('');
+
+  // 空状态：收藏视图与普通视图给不同文案
+  const empty = $('#hl-empty');
+  const showEmpty = state.items.length === 0;
+  empty.classList.toggle('hidden', !showEmpty);
+  if (showEmpty) {
+    $('#empty-emoji').textContent = state.favoriteOnly ? '💛' : '🐾';
+    $('#empty-title').textContent = state.favoriteOnly
+      ? '还没有收藏的高光' : '今天还没有高光时刻';
+    $('#empty-sub').textContent = state.favoriteOnly
+      ? '看到喜欢的瞬间，点亮小红心吧' : '毛孩子们正在酝酿精彩…';
+  }
+
+  $('#more-wrap').classList.toggle(
+    'hidden', !(state.hasMore && state.items.length));
+  $('#hl-count').textContent = state.items.length
+    ? `已加载 ${state.items.length} 条` : '';
+}
+
+/** 单张高光卡片 HTML（内容一律 esc 转义） */
+function cardHTML(h) {
+  const tags = (h.tags || []).slice(0, 4)
+    .map((t) => `<span class="tag">${esc(t)}</span>`).join('');
+  const score = Number(h.score) || 0;
+  const ts = h.started_at || h.created_at || 0;
+  return `
+  <article class="card-hl" data-id="${esc(h.id)}">
+    <div class="thumb-wrap">
+      <span class="thumb-emoji">🐾</span>
+      <img class="thumb" src="/api/highlights/${esc(h.id)}/thumb"
+           alt="缩略图" loading="lazy"
+           onerror="this.classList.add('broken');this.onerror=null;">
+      <span class="dur">${fmtClock(h.duration)}</span>
+      <button class="fav-btn" data-fav="${esc(h.id)}" aria-label="收藏">
+        ${h.favorite ? '❤️' : '🤍'}
+      </button>
+    </div>
+    <div class="card-body">
+      <h4 class="hl-title">${esc(h.title || '未命名时刻')}</h4>
+      ${h.caption ? `<p class="hl-caption">${esc(h.caption)}</p>` : ''}
+      <div class="hl-meta">
+        <span>${fmtTime(ts)}</span>
+        ${score ? `<span class="hl-score">⭐ ${score.toFixed(2)}</span>` : ''}
+      </div>
+      ${tags ? `<div class="hl-tags">${tags}</div>` : ''}
+    </div>
+  </article>`;
+}
+
+/** 收藏 / 取消收藏（乐观更新，失败回滚） */
+async function toggleFavorite(id) {
+  const h = state.items.find((x) => x.id === id);
+  if (!h) return;
+  const next = !h.favorite;
+  h.favorite = next; // current 与 items 里是同一引用，弹层同步生效
+  refreshFavUI(id, next);
+  try {
+    await fetchJSON(`/api/highlights/${id}/favorite`, {
+      method: 'POST',
+      body: JSON.stringify({ favorite: next }),
+    });
+  } catch (e) {
+    h.favorite = !next;
+    refreshFavUI(id, !next);
+    toast('操作失败：' + e.message);
+  }
+}
+
+/** 同步卡片与弹层上的心形按钮 */
+function refreshFavUI(id, on) {
+  const btn = $(`.fav-btn[data-fav="${id}"]`);
+  if (btn) btn.textContent = on ? '❤️' : '🤍';
+  if (state.current && state.current.id === id) {
+    $('#player-fav').textContent = on ? '❤️' : '🤍';
+  }
+}
+
+/* ============================================================
+ * 视频播放弹层
+ * ============================================================ */
+
+function openPlayer(id) {
+  const h = state.items.find((x) => x.id === id);
+  if (!h) return;
+  state.current = h;
+  $('#player-title').textContent = h.title || '未命名时刻';
+  $('#player-caption').textContent = h.caption || '';
+  $('#player-fav').textContent = h.favorite ? '❤️' : '🤍';
+
+  const video = $('#player-video');
+  video.src = `/api/highlights/${h.id}/video`;
+  $('#player-modal').classList.remove('hidden');
+  document.body.classList.add('modal-open');
+  video.play().catch(() => { /* 自动播放被拒时等用户手动点 */ });
+}
+
+function closePlayer() {
+  const video = $('#player-video');
+  video.pause();
+  video.removeAttribute('src');
+  video.load(); // 释放连接，避免占用手机带宽
+  state.current = null;
+  $('#player-modal').classList.add('hidden');
+  document.body.classList.remove('modal-open');
+}
+
+/** 删除当前播放的高光（连带视频/缩略图文件） */
+async function deleteCurrent() {
+  const h = state.current;
+  if (!h) return;
+  const name = h.title || '这个时刻';
+  if (!confirm(`确定删除「${name}」吗？视频文件也会一并删除哦`)) return;
+  try {
+    await fetchJSON(`/api/highlights/${h.id}`, { method: 'DELETE' });
+    state.items = state.items.filter((x) => x.id !== h.id);
+    renderHighlights();
+    closePlayer();
+    toast('已删除');
+    loadStatus(); // 顺便刷新今日数量
+  } catch (e) {
+    toast('删除失败：' + e.message);
+  }
+}
+
+/* ============================================================
+ * Tab 切换
+ * ============================================================ */
+function switchTab(name) {
+  state.tab = name;
+  $$('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  $$('.page').forEach((p) => p.classList.toggle('hidden', p.id !== `page-${name}`));
+
+  if (name === 'live') enterLive();
+  else leaveLive();          // 离开实时页时断流，省电省流量
+  if (name === 'digest') loadDigest();
+  if (name === 'settings') loadConfigIntoUI();
+}
+
+/* ============================================================
+ * 实时画面
+ * ============================================================ */
+function enterLive() {
+  const img = $('#live-img');
+  if (!img.getAttribute('src')) img.src = '/api/live';
+}
+
+function leaveLive() {
+  // 断开 MJPEG 连接：移除 src 即停止拉流
+  $('#live-img').removeAttribute('src');
+}
+
+function retryLive() {
+  $('#live-offline').classList.add('hidden');
+  $('#live-img').src = `/api/live?_=${Date.now()}`; // 加时间戳防缓存
+}
+
+function initLive() {
+  const img = $('#live-img');
+  img.addEventListener('error', () => {
+    $('#live-offline').classList.remove('hidden');
+  });
+  $('#btn-live-retry').addEventListener('click', retryLive);
+}
+
+/* ============================================================
+ * 日报
+ * ============================================================ */
+async function loadDigest() {
+  const input = $('#digest-date');
+  input.value = state.digestDate;
+  input.max = todayStr(); // 不能选未来
+
+  $('#digest-loading').classList.remove('hidden');
+  $('#digest-body').innerHTML = '';
+  try {
+    const data = await fetchJSON(`/api/digest?date=${encodeURIComponent(state.digestDate)}`);
+    $('#digest-body').innerHTML = renderMarkdown(data.markdown || '');
+  } catch (e) {
+    $('#digest-body').innerHTML =
+      `<div class="digest-error">日报加载失败：${esc(e.message)}</div>`;
+  } finally {
+    $('#digest-loading').classList.add('hidden');
+  }
+}
+
+/** 日报日期前后翻页 */
+function shiftDigestDate(days) {
+  const d = new Date(state.digestDate + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  const p = (n) => String(n).padStart(2, '0');
+  const target = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  if (target > todayStr()) { toast('还不能穿越到未来哦'); return; }
+  state.digestDate = target;
+  loadDigest();
+}
+
+/* ============================================================
+ * 设置页
+ * ============================================================ */
+
+/** 拉取配置并回填 UI（有缓存时直接用） */
+async function loadConfigIntoUI(force = false) {
+  if (state.cfg && !force) { applyConfigToUI(); return; }
+  try {
+    state.cfg = await fetchJSON('/api/config');
+    applyConfigToUI();
+  } catch (e) {
+    toast('读取配置失败：' + e.message);
+  }
+}
+
+/** 把配置回填到表单控件 */
+function applyConfigToUI() {
+  const cfg = state.cfg || {};
+  const scene = (cfg.pipeline && cfg.pipeline.scene_mode) || 'auto';
+  $$('#scene-seg .seg-btn').forEach(
+    (b) => b.classList.toggle('active', b.dataset.mode === scene));
+  // AI 开关：配置缺省视为开启
+  $('#ai-switch').checked = !(cfg.ai && cfg.ai.enabled === false);
+  $('#api-key').value = '';
+}
+
+/** 保存设置（场景模式 + AI 开关 + 可选的新 API Key） */
+async function saveConfig() {
+  const sceneBtn = $('#scene-seg .seg-btn.active');
+  const body = {
+    pipeline: { scene_mode: sceneBtn ? sceneBtn.dataset.mode : 'auto' },
+    ai: { enabled: $('#ai-switch').checked },
+  };
+  const key = $('#api-key').value.trim();
+  if (key) body.ai.api_key = key; // 留空表示不修改密钥
+
+  const btn = $('#btn-save-config');
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+  try {
+    const resp = await fetchJSON('/api/config', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    if (resp.config) state.cfg = resp.config;
+    applyConfigToUI();
+    toast(resp.message || '设置已保存 ✅');
+  } catch (e) {
+    toast('保存失败：' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '保存设置';
+  }
+}
+
+/** 触发 pipeline 立即处理 */
+async function runPipelineNow() {
+  const btn = $('#btn-run-pipeline');
+  btn.disabled = true;
+  btn.textContent = '⏳ 触发中…';
+  try {
+    const r = await fetchJSON('/api/pipeline/run', { method: 'POST' });
+    toast(r.message || '已触发立即处理');
+    loadStatus();
+  } catch (e) {
+    toast('触发失败：' + e.message); // pipeline 未部署时这里是 503
+  } finally {
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = '▶ 立即处理';
+    }, 1500);
+  }
+}
+
+/* ============================================================
+ * 入口：事件绑定 + 初始加载
+ * ============================================================ */
+document.addEventListener('DOMContentLoaded', () => {
+  // —— Tab 切换 ——
+  $$('.tab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
+  // —— 高光墙 ——
+  // 事件委托：点卡片播放、点心形收藏
+  $('#hl-grid').addEventListener('click', (ev) => {
+    const favBtn = ev.target.closest('.fav-btn');
+    if (favBtn) { toggleFavorite(favBtn.dataset.fav); return; }
+    const card = ev.target.closest('.card-hl');
+    if (card) openPlayer(card.dataset.id);
+  });
+
+  // 收藏筛选（全部 / 仅收藏）
+  $('#fav-filter').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.seg-btn');
+    if (!btn) return;
+    $$('#fav-filter .seg-btn').forEach((b) => b.classList.toggle('active', b === btn));
+    state.favoriteOnly = btn.dataset.fav === 'true';
+    loadHighlights(true);
+  });
+
+  $('#btn-more').addEventListener('click', () => {
+    state.offset += state.limit;
+    loadHighlights(false);
+  });
+  $('#btn-empty-refresh').addEventListener('click', () => loadHighlights(true));
+
+  // —— 播放弹层 ——
+  $('#player-close').addEventListener('click', closePlayer);
+  $('#player-mask').addEventListener('click', closePlayer);
+  $('#player-fav').addEventListener(
+    'click', () => state.current && toggleFavorite(state.current.id));
+  $('#player-del').addEventListener('click', deleteCurrent);
+
+  // —— 实时画面 ——
+  initLive();
+
+  // —— 日报 ——
+  $('#digest-prev').addEventListener('click', () => shiftDigestDate(-1));
+  $('#digest-next').addEventListener('click', () => shiftDigestDate(1));
+  $('#digest-date').addEventListener('change', (e) => {
+    state.digestDate = e.target.value || todayStr();
+    loadDigest();
+  });
+
+  // —— 设置页 ——
+  $('#scene-seg').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.seg-btn');
+    if (!btn) return;
+    $$('#scene-seg .seg-btn').forEach((b) => b.classList.toggle('active', b === btn));
+  });
+  $('#btn-save-config').addEventListener('click', saveConfig);
+  $('#btn-run-pipeline').addEventListener('click', runPipelineNow);
+
+  // —— 初始加载 ——
+  loadStatus();
+  loadHighlights(true);
+  setInterval(loadStatus, 10000); // 状态栏每 10 秒自动刷新
+});

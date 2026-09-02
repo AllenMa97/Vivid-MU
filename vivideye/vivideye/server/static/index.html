@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<!-- VividEye 单页应用：高光墙 / 实时画面 / 日报 / 设置（移动优先，全中文） -->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#FFF8F0">
+  <title>VividEye · 家庭高光相机</title>
+  <!-- 内联 emoji 图标，避免额外请求 -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐾</text></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ================= 顶部状态栏 ================= -->
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-logo">🐾</span>
+    <span class="brand-name">VividEye</span>
+    <span class="brand-sub">家庭高光相机</span>
+  </div>
+  <div class="chips">
+    <span class="chip" id="chip-record" title="录制状态">
+      <span class="dot" id="record-dot"></span><span id="record-text">检测中…</span>
+    </span>
+    <span class="chip" id="chip-today" title="今日高光数">今日 ✨ --</span>
+    <span class="chip" id="chip-disk" title="磁盘剩余空间">💾 --</span>
+  </div>
+</header>
+
+<main class="main">
+
+  <!-- ================= Tab 1：高光墙 ================= -->
+  <section class="page" id="page-highlights">
+    <div class="toolbar">
+      <div class="seg" id="fav-filter">
+        <button class="seg-btn active" data-fav="false">全部</button>
+        <button class="seg-btn" data-fav="true">❤️ 收藏</button>
+      </div>
+      <span class="toolbar-count" id="hl-count"></span>
+    </div>
+
+    <!-- 高光卡片网格（JS 动态渲染） -->
+    <div class="grid" id="hl-grid"></div>
+
+    <!-- 空状态 -->
+    <div class="empty hidden" id="hl-empty">
+      <div class="empty-emoji" id="empty-emoji">🐾</div>
+      <div class="empty-title" id="empty-title">今天还没有高光时刻</div>
+      <div class="empty-sub" id="empty-sub">毛孩子们正在酝酿精彩…</div>
+      <button class="btn ghost" id="btn-empty-refresh">刷新看看</button>
+    </div>
+
+    <!-- 加载更多 -->
+    <div class="more-wrap hidden" id="more-wrap">
+      <button class="btn ghost" id="btn-more">加载更多</button>
+    </div>
+  </section>
+
+  <!-- ================= Tab 2：实时画面 ================= -->
+  <section class="page hidden" id="page-live">
+    <div class="live-card">
+      <div class="live-head">
+        <span class="live-badge"><span class="dot on"></span>实时画面</span>
+        <button class="btn ghost small" id="btn-live-retry">重新连接</button>
+      </div>
+      <div class="live-frame" id="live-frame">
+        <!-- MJPEG 直出：浏览器 <img> 原生支持 multipart 流 -->
+        <img id="live-img" alt="实时画面" src="/api/live">
+        <div class="live-offline hidden" id="live-offline">
+          <div class="empty-emoji">📷</div>
+          <div class="empty-title">暂时连不上摄像头</div>
+          <div class="empty-sub">请确认手机上的相机 App 正在运行</div>
+        </div>
+      </div>
+    </div>
+    <p class="hint">提示：实时画面来自手机摄像头，长时间观看会消耗电量与流量。</p>
+  </section>
+
+  <!-- ================= Tab 3：日报 ================= -->
+  <section class="page hidden" id="page-digest">
+    <div class="digest-nav">
+      <button class="btn ghost small" id="digest-prev">‹ 前一天</button>
+      <input type="date" id="digest-date" class="date-input" aria-label="选择日期">
+      <button class="btn ghost small" id="digest-next">后一天 ›</button>
+    </div>
+    <div class="loading" id="digest-loading">日报生成中，请稍候…</div>
+    <!-- 内置极简 Markdown 渲染，无 CDN 依赖，离线可用 -->
+    <article class="digest-body" id="digest-body"></article>
+  </section>
+
+  <!-- ================= Tab 4：设置 ================= -->
+  <section class="page hidden" id="page-settings">
+
+    <div class="card">
+      <h3 class="card-title">🎬 场景模式</h3>
+      <p class="card-sub">选择最贴合的观看场景，AI 会调整识别偏好</p>
+      <div class="seg wrap" id="scene-seg">
+        <button class="seg-btn" data-mode="auto">🤖 自动</button>
+        <button class="seg-btn" data-mode="pet">🐾 宠物</button>
+        <button class="seg-btn" data-mode="kid">👶 萌娃</button>
+        <button class="seg-btn" data-mode="home">🏠 居家</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">🧠 AI 智能分析</h3>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-title">云端 AI 识别</div>
+          <div class="card-sub">关闭后仅录制，不再生成高光与日报</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="ai-switch" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">🔑 API Key</h3>
+      <p class="card-sub">用于云端大模型分析（如 DashScope），保存在手机本地</p>
+      <input type="password" id="api-key" class="input" autocomplete="off"
+             placeholder="已保存的密钥已隐藏，输入新值可覆盖">
+      <button class="btn primary block" id="btn-save-config">保存设置</button>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">⚙️ 立即处理</h3>
+      <p class="card-sub">不用等定时任务，马上分析最新的录像片段</p>
+      <button class="btn primary block" id="btn-run-pipeline">▶ 立即处理</button>
+      <div class="pipeline-status" id="pipeline-status">--</div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">ℹ️ 关于</h3>
+      <p class="card-sub">VividEye v0.1.0 · 旧手机变身 AI 高光相机<br>局域网访问 · 数据不出家门</p>
+    </div>
+  </section>
+</main>
+
+<!-- ================= 视频播放弹层 ================= -->
+<div class="modal hidden" id="player-modal">
+  <div class="modal-mask" id="player-mask"></div>
+  <div class="modal-panel">
+    <video id="player-video" controls playsinline preload="metadata"></video>
+    <div class="modal-info">
+      <div class="modal-title" id="player-title"></div>
+      <div class="modal-caption" id="player-caption"></div>
+      <div class="modal-actions">
+        <button class="icon-btn" id="player-fav" title="收藏">🤍</button>
+        <button class="icon-btn danger" id="player-del" title="删除">🗑️</button>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="player-close">关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 底部 Tab 栏 ================= -->
+<nav class="tabbar">
+  <button class="tab active" data-tab="highlights"><span class="tab-icon">✨</span><span>高光</span></button>
+  <button class="tab" data-tab="live"><span class="tab-icon">📹</span><span>实时</span></button>
+  <button class="tab" data-tab="digest"><span class="tab-icon">📖</span><span>日报</span></button>
+  <button class="tab" data-tab="settings"><span class="tab-icon">⚙️</span><span>设置</span></button>
+</nav>
+
+<!-- 轻提示 -->
+<div class="toast hidden" id="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

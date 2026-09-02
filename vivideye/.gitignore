@@ -33,3 +33,6 @@ htmlcov/
 # build
 dist/
 build/
+
+# deploy: user-provided APKs (copyright — see deploy/apks/README.md)
+deploy/apks/*.apk

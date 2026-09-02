@@ -14,6 +14,9 @@ class ScoredSegment:
     duration: float
     score: float
     features: Dict[str, float] = field(default_factory=dict)
+    # 用于多样性去重 (P3)
+    scene_key: str = ""
+    clip_embedding: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -46,9 +49,14 @@ def extract_feature_dict(fine_features) -> Dict[str, float]:
         features['has_large_face'] = 0.0
     
     if fine_features.scene_features:
-        features['scene_diversity'] = normalize(fine_features.scene_features.scene_diversity, 0, 1)
+        clip_div = getattr(fine_features.scene_features, 'clip_diversity', 0.0) or 0.0
+        heur_div = fine_features.scene_features.scene_diversity or 0.0
+        # 有真实 CLIP 语义多样性时优先使用
+        features['scene_diversity'] = normalize(clip_div if clip_div > 0 else heur_div, 0, 1)
+        features['clip_diversity'] = normalize(clip_div, 0, 1)
     else:
         features['scene_diversity'] = 0.0
+        features['clip_diversity'] = 0.0
     
     if fine_features.speech_features:
         features['speech_ratio'] = normalize(fine_features.speech_features.speech_ratio, 0, 1)
@@ -56,6 +64,22 @@ def extract_feature_dict(fine_features) -> Dict[str, float]:
     else:
         features['speech_ratio'] = 0.0
         features['speech_density'] = 0.0
+    
+    # YOLO 物体级语义特征 (P1)
+    if fine_features.object_features:
+        of = fine_features.object_features
+        features['pet_presence'] = normalize(of.pet_presence, 0, 1)
+        features['pet_count'] = normalize(of.pet_count, 0, 3)
+        features['person_count'] = normalize(of.person_count, 0, 5)
+        features['interaction_ratio'] = normalize(of.interaction_ratio, 0, 1)
+        features['toy_presence'] = normalize(of.toy_presence, 0, 1)
+        features['object_diversity'] = normalize(of.object_diversity, 0, 1)
+        features['action_intensity'] = normalize(of.action_intensity, 0, 1)
+        features['has_close_pet'] = 1.0 if of.has_close_pet > 0.3 else 0.0
+    else:
+        for k in ('pet_presence', 'pet_count', 'person_count', 'interaction_ratio',
+                  'toy_presence', 'object_diversity', 'action_intensity', 'has_close_pet'):
+            features[k] = 0.0
     
     return features
 
@@ -92,6 +116,75 @@ def select_segments_greedy(segments: List[ScoredSegment], target_duration: float
     selected.sort(key=lambda s: s.start_time)
     
     return selected
+
+
+def select_segments_constrained(segments: List[ScoredSegment], target_duration: float,
+                                max_ratio: float, min_ratio: float,
+                                min_gap: float = 3.0,
+                                diversity_threshold: float = 0.92) -> List[ScoredSegment]:
+    """
+    带约束的选择 (P3):
+    - 总时长约束 (0/1 背包式, 允许小超调)
+    - 片段间最小时间间隔 (避免高光扎堆)
+    - 语义/场景多样性去重 (避免连续选中相似片段)
+
+    若约束过严导致结果不足, 自动回退到贪心选择。
+    """
+    max_duration = target_duration * max_ratio
+    min_duration = target_duration * min_ratio
+    sorted_segments = sorted(segments, key=lambda s: s.score, reverse=True)
+
+    def _build(pick):
+        return sorted((s for s in segments if s.segment_id in pick), key=lambda s: s.start_time)
+
+    def _diverse(seg, selected):
+        """判断新片段是否与已选片段过于相似"""
+        for s in selected:
+            # 场景类型相同 且 时间上相邻 -> 认为相似
+            if seg.scene_key and seg.scene_key == s.scene_key:
+                t_overlap = min(seg.end_time, s.end_time) - max(seg.start_time, s.start_time)
+                if t_overlap > 0:
+                    return False
+                if min(seg.duration, s.duration) > 0 and \
+                   abs(seg.start_time - s.start_time) < max(min_gap, min(seg.duration, s.duration)):
+                    return False
+            # CLIP embedding 余弦相似度太高
+            if (seg.clip_embedding is not None and s.clip_embedding is not None):
+                sim = float(np.dot(seg.clip_embedding, s.clip_embedding))
+                if sim > diversity_threshold:
+                    return False
+        return True
+
+    selected = []
+    total = 0.0
+    for seg in sorted_segments:
+        if total + seg.duration > max_duration:
+            continue
+        # 时间间隔约束: 与已选片段保持间隔 (允许边界相接)
+        ok_gap = True
+        for s in selected:
+            if seg.start_time < s.end_time + min_gap and seg.end_time > s.start_time - min_gap:
+                # 相邻但没有重叠时, 若场景不同仍允许
+                if seg.scene_key and seg.scene_key != s.scene_key:
+                    continue
+                ok_gap = False
+                break
+        if not ok_gap:
+            continue
+        if not _diverse(seg, selected):
+            continue
+        selected.append(seg)
+        total += seg.duration
+        if total >= max_duration:
+            break
+
+    result = _build({s.segment_id for s in selected})
+
+    # 约束过严导致结果不足 -> 回退到贪心
+    if sum(s.duration for s in result) < min_duration * 0.5 and len(segments) > 1:
+        logger.info("约束选择结果不足, 回退到贪心选择")
+        return select_segments_greedy(segments, target_duration, max_ratio, min_ratio)
+    return result
 
 
 def calc_time_overlap(segments1: List[ScoredSegment], segments2: List[ScoredSegment]) -> float:
@@ -147,13 +240,24 @@ class Selector:
         
         for ff in fine_features_list:
             features = extract_feature_dict(ff)
+            scene_key = ""
+            clip_embedding = None
+            if ff.scene_features is not None:
+                scene_key = ff.scene_features.dominant_scene or ""
+                emb = getattr(ff.scene_features, 'clip_embedding', None)
+                if emb is not None:
+                    emb = np.asarray(emb, dtype=np.float32).reshape(-1)
+                    norm = np.linalg.norm(emb)
+                    clip_embedding = emb / norm if norm > 0 else emb
             scored_segments.append(ScoredSegment(
                 segment_id=ff.segment_id,
                 start_time=ff.start_time,
                 end_time=ff.end_time,
                 duration=ff.duration,
                 score=0.0,
-                features=features
+                features=features,
+                scene_key=scene_key,
+                clip_embedding=clip_embedding
             ))
         
         solutions = []
@@ -168,15 +272,27 @@ class Selector:
                 end_time=s.end_time,
                 duration=s.duration,
                 score=s.score,
-                features=s.features.copy()
+                features=s.features.copy(),
+                scene_key=s.scene_key,
+                clip_embedding=s.clip_embedding
             ) for s in scored_segments]
             
-            selected = select_segments_greedy(
-                strategy_segments,
-                self.config.target_duration,
-                self.config.max_duration_ratio,
-                self.config.min_duration_ratio
-            )
+            if getattr(self.config, 'use_constrained_selection', True):
+                selected = select_segments_constrained(
+                    strategy_segments,
+                    self.config.target_duration,
+                    self.config.max_duration_ratio,
+                    self.config.min_duration_ratio,
+                    min_gap=getattr(self.config, 'min_gap', 3.0),
+                    diversity_threshold=getattr(self.config, 'diversity_threshold', 0.92)
+                )
+            else:
+                selected = select_segments_greedy(
+                    strategy_segments,
+                    self.config.target_duration,
+                    self.config.max_duration_ratio,
+                    self.config.min_duration_ratio
+                )
             
             if selected:
                 total_duration = sum(s.duration for s in selected)

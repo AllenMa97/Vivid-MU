@@ -15,6 +15,8 @@ from coarse_filter import CoarseFilter, Segment, CoarseFeatures
 from fine_filter import FineFilter, FineFeatures, FaceFeatures, SceneFeatures, SpeechFeatures
 from selector import Selector, Solution, ScoredSegment
 from exporter import Exporter
+from device_manager import DeviceManager
+from yolo_detector import ObjectFeatures
 
 
 def setup_logging():
@@ -112,6 +114,20 @@ def save_fine_results(features: List[FineFeatures], output_path: Path) -> None:
                 "speech_segments": feat.speech_features.speech_segments
             }
         
+        if feat.object_features:
+            feat_data["object_features"] = {
+                "pet_presence": round(feat.object_features.pet_presence, 4),
+                "pet_count": round(feat.object_features.pet_count, 4),
+                "person_count": round(feat.object_features.person_count, 4),
+                "interaction_ratio": round(feat.object_features.interaction_ratio, 4),
+                "toy_presence": round(feat.object_features.toy_presence, 4),
+                "object_diversity": round(feat.object_features.object_diversity, 4),
+                "action_intensity": round(feat.object_features.action_intensity, 4),
+                "has_close_pet": round(feat.object_features.has_close_pet, 4),
+                "det_confidence": round(feat.object_features.det_confidence, 4),
+                "tracked_segments": feat.object_features.tracked_segments
+            }
+        
         results.append(feat_data)
     
     output_data = {
@@ -182,7 +198,8 @@ def load_fine_results(output_path: Path) -> Optional[List[FineFeatures]]:
                 scene_features = SceneFeatures(
                     dominant_scene=sf.get("dominant_scene", "unknown"),
                     scene_diversity=sf.get("scene_diversity", 0),
-                    scene_scores=sf.get("scene_scores", {})
+                    scene_scores=sf.get("scene_scores", {}),
+                    clip_diversity=sf.get("clip_diversity", 0.0)
                 )
             
             speech_features = None
@@ -194,6 +211,22 @@ def load_fine_results(output_path: Path) -> Optional[List[FineFeatures]]:
                     speech_segments=sf.get("speech_segments", [])
                 )
             
+            object_features = None
+            if "object_features" in feat_data:
+                of = feat_data["object_features"]
+                object_features = ObjectFeatures(
+                    pet_presence=of.get("pet_presence", 0),
+                    pet_count=of.get("pet_count", 0),
+                    person_count=of.get("person_count", 0),
+                    interaction_ratio=of.get("interaction_ratio", 0),
+                    toy_presence=of.get("toy_presence", 0),
+                    object_diversity=of.get("object_diversity", 0),
+                    action_intensity=of.get("action_intensity", 0),
+                    has_close_pet=of.get("has_close_pet", 0),
+                    det_confidence=of.get("det_confidence", 0),
+                    tracked_segments=of.get("tracked_segments", 0)
+                )
+            
             feat = FineFeatures(
                 segment_id=feat_data["segment_id"],
                 start_time=feat_data["start_time"],
@@ -202,6 +235,7 @@ def load_fine_results(output_path: Path) -> Optional[List[FineFeatures]]:
                 face_features=face_features,
                 scene_features=scene_features,
                 speech_features=speech_features,
+                object_features=object_features,
                 coarse_score=feat_data.get("coarse_score", 0),
                 stability_score=feat_data.get("stability_score", 0),
                 audio_onset_count=feat_data.get("audio_onset_count", 0)
@@ -404,7 +438,14 @@ def process_video(video_path: Path, output_base_dir: Path) -> bool:
             logger.info("Stage 3: Fine Filter")
             logger.info("=" * 60)
             
-            fine_filter = FineFilter(config.fine_filter)
+            device_manager = DeviceManager(policy=config.device.policy,
+                                           fallback=config.device.fallback)
+            fine_filter = FineFilter(
+                config.fine_filter,
+                device_manager=device_manager,
+                yolo_config=config.yolo,
+                yolo_enabled=config.yolo.enabled,
+            )
             fine_features = fine_filter.process_segments(coarse_segments, video_processor, audio_path)
             
             logger.info(f"Fine filter done: {len(fine_features)} segments processed")

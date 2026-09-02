@@ -83,12 +83,45 @@ class StrategyConfig:
 
 
 @dataclass
+class DeviceConfig:
+    """CPU / NPU / GPU 混合设备调度配置"""
+    # 模型分组 → 目标设备 (auto/cpu/gpu/npu)
+    # 未配置的分组自动走 auto (探测到的最优设备)
+    policy: Dict[str, str] = field(default_factory=lambda: {
+        "yolo": "auto",
+        "clip": "auto",
+        "vad": "cpu",
+        "face": "auto",
+        "aesthetic": "auto",
+    })
+    # 目标设备推理失败时是否自动降级到 CPU
+    fallback: bool = True
+
+
+@dataclass
+class YoloConfig:
+    """YOLO 目标检测配置"""
+    enabled: bool = True
+    model_path: str = "models/yolov8n.onnx"
+    conf_threshold: float = 0.25
+    iou_threshold: float = 0.45
+    input_size: int = 640
+    # 对片段采样帧做检测的频率
+    sample_fps: float = 1.0
+    track: bool = True
+
+
+@dataclass
 class SelectorConfig:
     target_duration: float = 30 * 60
     max_duration_ratio: float = 1.1
     min_duration_ratio: float = 0.9
     overlap_threshold: float = 0.5
     max_solutions: int = 3
+    # P3 选择算法升级: 片段间最小时间间隔(秒) 与 相似度去重阈值(0-1)
+    min_gap: float = 3.0
+    diversity_threshold: float = 0.92
+    use_constrained_selection: bool = True
 
 
 @dataclass
@@ -99,41 +132,60 @@ class Config:
     coarse_filter: CoarseFilterConfig = field(default_factory=CoarseFilterConfig)
     fine_filter: FineFilterConfig = field(default_factory=FineFilterConfig)
     selector: SelectorConfig = field(default_factory=SelectorConfig)
+    device: DeviceConfig = field(default_factory=DeviceConfig)
+    yolo: YoloConfig = field(default_factory=YoloConfig)
     
     strategies: List[StrategyConfig] = field(default_factory=lambda: [
         StrategyConfig(
             name="social",
-            description="优先保留有人脸、有对话的场景",
+            description="优先保留有人脸、有对话、有人宠互动的场景",
             weights={
-                "face_count": 0.30,
-                "face_size": 0.15,
-                "speech_ratio": 0.25,
-                "speech_density": 0.10,
-                "stability": 0.10,
+                "face_count": 0.25,
+                "face_size": 0.10,
+                "speech_ratio": 0.20,
+                "speech_density": 0.05,
+                "interaction_ratio": 0.15,
+                "pet_presence": 0.10,
+                "stability": 0.05,
                 "coarse_score": 0.10,
             }
         ),
         StrategyConfig(
             name="event",
-            description="优先保留有突发事件、音频突变的场景",
+            description="优先保留有突发事件、音频突变、高动作强度的场景",
             weights={
-                "audio_onset_count": 0.30,
-                "coarse_score": 0.25,
-                "scene_diversity": 0.15,
-                "face_count": 0.15,
+                "audio_onset_count": 0.25,
+                "coarse_score": 0.20,
+                "action_intensity": 0.20,
+                "scene_diversity": 0.10,
+                "face_count": 0.10,
                 "speech_ratio": 0.10,
                 "stability": 0.05,
             }
         ),
         StrategyConfig(
             name="exploration",
-            description="优先保留用户停下来关注的场景",
+            description="优先保留用户停下来关注、内容丰富的场景",
             weights={
-                "stability": 0.35,
-                "scene_diversity": 0.20,
-                "face_count": 0.15,
-                "speech_ratio": 0.15,
+                "stability": 0.20,
+                "scene_diversity": 0.15,
+                "object_diversity": 0.15,
+                "pet_presence": 0.15,
+                "interaction_ratio": 0.10,
+                "face_count": 0.10,
                 "coarse_score": 0.15,
+            }
+        ),
+        StrategyConfig(
+            name="pet",
+            description="优先保留宠物行为丰富、人宠互动多的场景",
+            weights={
+                "pet_presence": 0.30,
+                "interaction_ratio": 0.25,
+                "action_intensity": 0.15,
+                "toy_presence": 0.10,
+                "coarse_score": 0.10,
+                "speech_ratio": 0.10,
             }
         ),
     ])
@@ -170,6 +222,30 @@ class Config:
         
         if 'merge_gap' in user_config:
             self.coarse_filter.merge_gap = user_config['merge_gap']
+        
+        # 设备调度策略: DEVICE_POLICY=yolo:auto,clip:auto,vad:cpu,face:auto
+        if 'device_policy' in user_config:
+            for item in str(user_config['device_policy']).split(','):
+                if ':' in item:
+                    k, v = item.split(':', 1)
+                    k, v = k.strip(), v.strip()
+                    if k and v.lower() in ('auto', 'cpu', 'gpu', 'npu'):
+                        self.device.policy[k] = v.lower()
+            logger.info(f"设备调度策略: {self.device.policy}")
+        
+        # YOLO 开关与参数
+        if 'yolo_enabled' in user_config:
+            self.yolo.enabled = str(user_config['yolo_enabled']).lower() in ('1', 'true', 'yes', 'on')
+        if 'yolo_conf' in user_config:
+            self.yolo.conf_threshold = float(user_config['yolo_conf'])
+        
+        # P3 选择算法
+        if 'use_constrained_selection' in user_config:
+            self.selector.use_constrained_selection = str(user_config['use_constrained_selection']).lower() in ('1', 'true', 'yes', 'on')
+        if 'min_gap' in user_config:
+            self.selector.min_gap = float(user_config['min_gap'])
+        if 'diversity_threshold' in user_config:
+            self.selector.diversity_threshold = float(user_config['diversity_threshold'])
 
 
 config = Config()

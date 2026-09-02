@@ -5,6 +5,9 @@ from typing import List, Dict, Optional, Any
 from pathlib import Path
 import logging
 
+from device_manager import DeviceManager
+from yolo_detector import YoloDetector, ObjectFeatures
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,6 +39,10 @@ class SceneFeatures:
     scene_scores: Dict[str, float] = field(default_factory=dict)
     scene_diversity: float = 0.0
     dominant_scene: str = ""
+    # 使用 CLIP 图像 embedding 计算的语义多样性 (真实神经网络信号)
+    clip_diversity: float = 0.0
+    # CLIP 片段级 embedding (均值池化), 用于跨片段相似度/独特性
+    clip_embedding: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -55,6 +62,7 @@ class FineFeatures:
     face_features: Optional[FaceFeatures] = None
     scene_features: Optional[SceneFeatures] = None
     speech_features: Optional[SpeechFeatures] = None
+    object_features: Optional[ObjectFeatures] = None
     
     coarse_score: float = 0.0
     stability_score: float = 0.5
@@ -64,9 +72,12 @@ class FineFeatures:
 
 
 class FaceDetector:
-    def __init__(self, confidence_threshold: float = 0.5):
+    def __init__(self, confidence_threshold: float = 0.5, device_manager: Optional[DeviceManager] = None):
         self.confidence_threshold = confidence_threshold
+        self.device_manager = device_manager
         self.net = None
+        self.backend = cv2.dnn.DNN_BACKEND_OPENCV
+        self.target = cv2.dnn.DNN_TARGET_CPU
         self._init_detector()
     
     def _init_detector(self):
@@ -74,14 +85,19 @@ class FaceDetector:
             proto_path = Path(__file__).parent / "models" / "deploy.prototxt"
             model_path = Path(__file__).parent / "models" / "res10_300x300_ssd_iter_140000.caffemodel"
             
-            if proto_path.exists() and model_path.exists():
-                self.net = cv2.dnn.readNetFromCaffe(str(proto_path), str(model_path))
-                logger.info("Loaded Caffe face detection model")
-            else:
-                self.net = cv2.dnn.readNetFromCaffe(
-                    str(Path(__file__).parent / "models" / "deploy.prototxt"),
-                    str(Path(__file__).parent / "models" / "res10_300x300_ssd_iter_140000.caffemodel")
-                )
+            if not (proto_path.exists() and model_path.exists()):
+                logger.warning("人脸检测模型不存在, 请运行 download_models.py 下载")
+                self.net = None
+                return
+            
+            if self.device_manager is not None:
+                self.backend, self.target = self.device_manager.cv2_dnn_backend_target()
+            
+            self.net = cv2.dnn.readNetFromCaffe(str(proto_path), str(model_path))
+            if hasattr(self.net, "setPreferableBackend"):
+                self.net.setPreferableBackend(self.backend)
+                self.net.setPreferableTarget(self.target)
+            logger.info(f"Loaded Caffe face detection model (backend={self.backend}, target={self.target})")
         except Exception as e:
             logger.warning(f"Could not load face detection model: {e}")
             self.net = None
@@ -158,8 +174,10 @@ class FaceDetector:
 
 
 class SceneClassifier:
-    def __init__(self):
+    def __init__(self, device_manager: Optional[DeviceManager] = None):
+        self.device_manager = device_manager
         self.model = None
+        self.input_name = None
         self.scene_labels = [
             "a person talking to camera",
             "outdoor street scene",
@@ -176,14 +194,29 @@ class SceneClassifier:
     
     def _init_model(self):
         try:
-            import onnxruntime as ort
             model_path = Path(__file__).parent / "models" / "clip_vit_b32.onnx"
-            if model_path.exists():
-                self.model = ort.InferenceSession(str(model_path))
-                logger.info("Loaded CLIP ONNX model")
+            if not model_path.exists():
+                logger.warning(
+                    "CLIP 模型不存在 (models/clip_vit_b32.onnx), "
+                    "场景特征回退到启发式。可用 download_models.py --with-clip 下载。")
+                self.model = None
+                return
+            if self.device_manager is not None:
+                self.model = self.device_manager.create_ort_session(
+                    str(model_path), model_group="clip")
+            else:
+                import onnxruntime as ort
+                self.model = ort.InferenceSession(
+                    str(model_path), providers=ort.get_available_providers())
+            self.input_name = self.model.get_inputs()[0].name
+            logger.info(f"Loaded CLIP ONNX model (session: {self.model.get_inputs()[0].name})")
         except Exception as e:
             logger.warning(f"Could not load CLIP model: {e}")
             self.model = None
+
+    @property
+    def clip_available(self) -> bool:
+        return self.model is not None
     
     def _extract_color_histogram(self, frame: np.ndarray) -> np.ndarray:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -231,38 +264,63 @@ class SceneClassifier:
         
         return scores
     
+    def _clip_preprocess(self, frame: np.ndarray, size: int = 224) -> np.ndarray:
+        """CLIP 标准预处理 (BGR -> RGB, resize center crop, normalize)"""
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w = rgb.shape[:2]
+        scale = size / min(h, w)
+        new_h, new_w = int(round(h * scale)), int(round(w * scale))
+        resized = cv2.resize(rgb, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        top = (new_h - size) // 2
+        left = (new_w - size) // 2
+        cropped = resized[top:top + size, left:left + size]
+        x = cropped.astype(np.float32) / 255.0
+        mean = np.array([0.48145466, 0.4578275, 0.40821073], dtype=np.float32)
+        std = np.array([0.26862954, 0.26130258, 0.27577711], dtype=np.float32)
+        x = (x - mean) / std
+        x = np.transpose(x, (2, 0, 1))[None, ...]
+        return x
+
+    def _embed(self, frame: np.ndarray) -> Optional[np.ndarray]:
+        """CLIP 图像 embedding (归一化)"""
+        if not self.clip_available:
+            return None
+        try:
+            inp = self._clip_preprocess(frame)
+            outputs = self.model.run(None, {self.input_name: inp})
+            emb = np.asarray(outputs[0]).reshape(-1)
+            norm = np.linalg.norm(emb)
+            return emb / norm if norm > 0 else emb
+        except Exception as e:
+            logger.warning(f"CLIP embed failed: {e}")
+            return None
+
     def classify(self, frame: np.ndarray) -> Dict[str, float]:
-        if self.model is not None:
-            return self._classify_with_model(frame)
-        else:
-            return self._estimate_scene_type(frame)
-    
-    def _classify_with_model(self, frame: np.ndarray) -> Dict[str, float]:
         return self._estimate_scene_type(frame)
-    
+
     def extract_features(self, frames: List[np.ndarray]) -> SceneFeatures:
         if not frames:
             return SceneFeatures()
         
         sample_frames = frames[::max(1, len(frames) // 3)]
+        sample_frames = sample_frames[:3]
         
+        # 1) 启发式场景类型 (始终保留作为兜底)
         all_scores = []
         for frame in sample_frames:
-            scores = self.classify(frame)
-            all_scores.append(scores)
+            all_scores.append(self.classify(frame))
         
         avg_scores = {}
         for label in self.scene_labels:
             values = [s.get(label, 0) for s in all_scores if label in s]
             avg_scores[label] = np.mean(values) if values else 0.0
         
-        if avg_scores:
-            dominant_scene = max(avg_scores.keys(), key=lambda k: avg_scores[k])
-        else:
-            dominant_scene = ""
+        dominant_scene = max(avg_scores, key=lambda k: avg_scores[k]) if avg_scores else ""
         
+        # 2) 颜色直方图多样性 (启发式, 作为备选)
+        scene_diversity = 0.0
         if len(sample_frames) > 1:
-            histograms = [self._extract_color_histogram(f) for f in sample_frames[:3]]
+            histograms = [self._extract_color_histogram(f) for f in sample_frames]
             diversities = []
             for i in range(len(histograms) - 1):
                 sim = cv2.compareHist(
@@ -272,33 +330,66 @@ class SceneClassifier:
                 )
                 diversities.append(1.0 - sim)
             scene_diversity = np.mean(diversities) if diversities else 0.0
-        else:
-            scene_diversity = 0.0
+        
+        # 3) CLIP 语义多样性 + 片段级 embedding (真实神经网络信号)
+        clip_diversity = 0.0
+        clip_embedding = None
+        if self.clip_available:
+            embeddings = [self._embed(f) for f in sample_frames]
+            embeddings = [e for e in embeddings if e is not None]
+            if len(embeddings) >= 2:
+                sims = [float(np.dot(embeddings[i], embeddings[i + 1]))
+                        for i in range(len(embeddings) - 1)]
+                clip_diversity = float(np.clip(1.0 - np.mean(sims), 0.0, 1.0))
+            if embeddings:
+                clip_embedding = np.mean(embeddings, axis=0)
+                clip_embedding /= (np.linalg.norm(clip_embedding) or 1.0)
         
         return SceneFeatures(
             scene_scores=avg_scores,
             scene_diversity=scene_diversity,
-            dominant_scene=dominant_scene
+            dominant_scene=dominant_scene,
+            clip_diversity=clip_diversity,
+            clip_embedding=clip_embedding
         )
 
 
 class VADProcessor:
-    def __init__(self, threshold: float = 0.5):
+    """语音活动检测 (VAD)
+
+    优先使用 Silero VAD (ONNX, 无需 torch); 模型缺失时回退到能量阈值法。
+    """
+    def __init__(self, threshold: float = 0.5, device_manager: Optional[DeviceManager] = None):
         self.threshold = threshold
+        self.device_manager = device_manager
         self.model = None
         self._init_model()
     
     def _init_model(self):
         try:
-            import torch
-            model_path = Path(__file__).parent / "models" / "silero_vad.jit"
-            if model_path.exists():
-                self.model = torch.jit.load(str(model_path))
-                logger.info("Loaded Silero VAD model")
+            model_path = Path(__file__).parent / "models" / "silero_vad.onnx"
+            if not model_path.exists():
+                logger.warning("Silero VAD 模型不存在 (models/silero_vad.onnx), "
+                               "语音检测回退到能量法。可用 download_models.py 下载。")
+                self.model = None
+                return
+            if self.device_manager is not None:
+                self.model = self.device_manager.create_ort_session(
+                    str(model_path), model_group="vad")
+            else:
+                import onnxruntime as ort
+                self.model = ort.InferenceSession(
+                    str(model_path), providers=ort.get_available_providers())
+            self.input_names = [i.name for i in self.model.get_inputs()]
+            logger.info(f"Loaded Silero VAD ONNX model (inputs={self.input_names})")
         except Exception as e:
             logger.warning(f"Could not load VAD model: {e}")
             self.model = None
-    
+
+    @property
+    def vad_available(self) -> bool:
+        return self.model is not None
+
     def _energy_based_vad(self, audio_segment: np.ndarray, sr: int = 16000) -> List[tuple]:
         frame_length = int(sr * 0.025)
         hop_length = int(sr * 0.010)
@@ -335,16 +426,68 @@ class VADProcessor:
             speech_segments.append((start_time, end_time))
         
         return speech_segments
-    
+
     def detect_speech(self, audio_segment: np.ndarray, sr: int = 16000) -> List[tuple]:
-        if self.model is not None:
-            return self._model_based_vad(audio_segment, sr)
-        else:
-            return self._energy_based_vad(audio_segment, sr)
-    
-    def _model_based_vad(self, audio_segment: np.ndarray, sr: int = 16000) -> List[tuple]:
+        if self.vad_available and sr == 16000:
+            try:
+                segments = self._model_based_vad(audio_segment, sr)
+                if segments is not None:
+                    return segments
+            except Exception as e:
+                logger.warning(f"Silero VAD 推理失败, 回退能量法: {e}")
         return self._energy_based_vad(audio_segment, sr)
-    
+
+    def _model_based_vad(self, audio_segment: np.ndarray, sr: int = 16000) -> Optional[List[tuple]]:
+        """Silero VAD 流式推理 (参考官方 OnnxWrapper 实现)
+
+        官方 ONNX 输入 = 64 样本上下文 + 512 新样本 (16k); 状态 state[2,1,128]。
+        """
+        chunk_size = 512          # 16k 采样率下每步处理 512 样本
+        context_size = 64         # 官方要求拼接的前 64 样本上下文
+        n_chunks = len(audio_segment) // chunk_size
+        if n_chunks == 0:
+            return []
+
+        state = np.zeros((2, 1, 128), dtype=np.float32)
+        context = np.zeros((1, context_size), dtype=np.float32)
+        has_sr_input = "sr" in self.input_names
+        sr_val = np.array(sr, dtype=np.int64)
+
+        probs = []
+        for i in range(n_chunks):
+            chunk = audio_segment[i * chunk_size:(i + 1) * chunk_size].astype(np.float32)
+            x = np.concatenate([context, chunk[None, :]], axis=1)  # (1, 576)
+            feed = {"input": x, "state": state}
+            if has_sr_input:
+                feed["sr"] = sr_val
+            outs = self.model.run(None, feed)
+            probs.append(float(np.asarray(outs[0]).reshape(-1)[0]))
+            state = np.asarray(outs[1]).reshape((2, 1, 128))
+            context = x[..., -context_size:]
+
+        # 阈值 + 滞后, 生成语音段
+        start_thr, end_thr = self.threshold, max(self.threshold - 0.15, 0.2)
+        hop_sec = chunk_size / sr
+        speech_segments = []
+        in_speech = False
+        start_i = 0
+        for i, p in enumerate(probs):
+            if not in_speech and p > start_thr:
+                in_speech = True
+                start_i = i
+            elif in_speech and p < end_thr:
+                in_speech = False
+                st = start_i * hop_sec
+                en = i * hop_sec
+                if en - st > 0.1:
+                    speech_segments.append((st, en))
+        if in_speech:
+            st = start_i * hop_sec
+            en = n_chunks * hop_sec
+            if en - st > 0.1:
+                speech_segments.append((st, en))
+        return speech_segments
+
     def extract_features(self, audio_segment: np.ndarray, sr: int = 16000) -> SpeechFeatures:
         if audio_segment is None or len(audio_segment) == 0:
             return SpeechFeatures()
@@ -365,11 +508,26 @@ class VADProcessor:
 
 
 class FineFilter:
-    def __init__(self, config):
+    def __init__(self, config, device_manager: Optional[DeviceManager] = None,
+                 yolo_config=None, yolo_enabled: bool = True):
         self.config = config
-        self.face_detector = FaceDetector(config.face_detection_confidence)
-        self.scene_classifier = SceneClassifier()
-        self.vad_processor = VADProcessor(config.vad_threshold)
+        self.device_manager = device_manager
+        self.face_detector = FaceDetector(config.face_detection_confidence, device_manager)
+        self.scene_classifier = SceneClassifier(device_manager)
+        self.vad_processor = VADProcessor(config.vad_threshold, device_manager)
+
+        # YOLO 物体检测 (可通过 yolo_config.enabled 关闭)
+        self.yolo_enabled = yolo_enabled
+        self.object_detector = None
+        if yolo_enabled and yolo_config is not None and getattr(yolo_config, "enabled", True):
+            self.object_detector = YoloDetector(
+                model_path=yolo_config.model_path,
+                conf_threshold=yolo_config.conf_threshold,
+                iou_threshold=yolo_config.iou_threshold,
+                input_size=yolo_config.input_size,
+                track=yolo_config.track,
+                device_manager=device_manager,
+            )
     
     def process_segment(self, segment, video_processor, audio_data: Optional[np.ndarray] = None,
                         sr: int = 16000, segment_id: int = 0) -> FineFeatures:
@@ -380,14 +538,22 @@ class FineFilter:
         
         frame_arrays = [f.frame for f in frames]
         
-        # Skip face detection to reduce computation (MTCNN is computationally expensive)
-        # and face features are not decisive for pet video highlight extraction
+        # 人脸检测 (通过 DeviceManager 选择 cv2.dnn 后端)
         face_features = None
+        if frame_arrays:
+            face_features = self.face_detector.extract_features(frame_arrays)
         
+        # 场景特征 (CLIP 语义 + 启发式)
         scene_features = None
         if frame_arrays:
             scene_features = self.scene_classifier.extract_features(frame_arrays)
         
+        # YOLO 物体级语义特征 (宠物 / 人物 / 互动)
+        object_features = None
+        if self.object_detector is not None and frame_arrays:
+            object_features = self.object_detector.extract_features(frame_arrays)
+        
+        # 语音活动检测 (Silero VAD / 能量法)
         speech_features = None
         if audio_data is not None and sr > 0:
             start_sample = int(segment.start_time * sr)
@@ -414,6 +580,7 @@ class FineFilter:
             face_features=face_features,
             scene_features=scene_features,
             speech_features=speech_features,
+            object_features=object_features,
             coarse_score=coarse_score,
             stability_score=stability_score,
             audio_onset_count=onset_count

@@ -1,0 +1,64 @@
+# ======================================================================
+# VividEye configuration template
+# Copy to user_config.yaml and adjust. user_config.yaml is git-ignored.
+# Every key here can also be overridden by env vars:
+#   VIVIDEYE_AI__API_KEY  ->  ai.api_key   ("__" = nesting level)
+# ======================================================================
+
+app:
+  name: VividEye
+  language: zh_CN          # zh_CN | en_US
+  data_dir: data
+
+# ---------------------------------------------------------------------
+# Phone camera capture (P20 running an IP-camera app, e.g. IP Webcam)
+# ---------------------------------------------------------------------
+capture:
+  source_url: http://192.168.1.100:8080/video   # MJPEG stream from the phone
+  segment_seconds: 600        # one file per 10 minutes
+  record_audio: true
+  video_codec: copy           # copy | h264
+  retention_hours: 72         # delete raw files older than 3 days
+  restart_on_failure: true
+
+# ---------------------------------------------------------------------
+# VividMU-derived pipeline
+# ---------------------------------------------------------------------
+pipeline:
+  run_interval_minutes: 30
+  max_segments_per_run: 24
+  min_highlight_score: 0.55
+  scene_mode: auto            # auto | pet | kid | home
+  step2:
+    yolo_enabled: true
+    yolo_conf: 0.25
+    device_policy: "yolo:auto,clip:auto,vad:cpu,face:auto"
+
+# ---------------------------------------------------------------------
+# AI capabilities (online LLM / VLM / generation APIs)
+# ---------------------------------------------------------------------
+ai:
+  provider: dashscope         # dashscope | openai | compatible
+  api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key: YOUR_API_KEY_HERE  # replace, or export VIVIDEYE_AI__API_KEY
+  vision_model: qwen3-vl-flash
+  audio_model: qwen-audio-turbo
+  text_model: qwen3-max
+  fast_model: qwen-flash
+  request_timeout: 60
+  max_retries: 3
+  max_concurrent_requests: 5
+  image_gen_enabled: true
+  audio_gen_enabled: true
+  video_gen_enabled: false
+
+storage:
+  db_path: data/vivideye.db
+  highlights_dir: data/highlights
+  raw_dir: data/raw
+  digest_dir: data/digests
+
+server:
+  host: 0.0.0.0
+  port: 8666
+  live_stream_proxy: true

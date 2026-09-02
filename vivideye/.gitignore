@@ -1,0 +1,35 @@
+# user config with secrets
+user_config.yaml
+config.yaml
+
+# data & models
+data/
+models/
+*.onnx
+*.pt
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# logs
+*.log
+logs/
+
+# test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# build
+dist/
+build/

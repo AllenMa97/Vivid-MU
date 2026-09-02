@@ -19,6 +19,7 @@ Layered loading (later wins):
 
 from __future__ import annotations
 
+import copy
 import os
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,11 @@ DEFAULTS: dict[str, Any] = {
         "record_audio": True,
         "segment_seconds": 600,        # one file per 10 minutes
         "video_codec": "copy",         # copy | h264
-        "retention_hours": 72,         # raw segments older than this are deleted
+        # 原始切片保留时长（小时）：原始片段体积 ≈ 摄像头码率 × 时长，
+        # 是存储占用的大头。默认 24h 仅作为高光提取的时间窗口，过期自动
+        # 删除；高光/收藏单独保存、不受此清理影响。P20 存储有限，建议
+        # 保持默认（存储安全优先）；空间充裕可适当调大。
+        "retention_hours": 24,
         "restart_on_failure": True,
         "watchdog_seconds": 60,        # recorder restart threshold
     },
@@ -93,6 +98,7 @@ DEFAULTS: dict[str, Any] = {
         "raw_dir": "data/raw",
         "digest_dir": "data/digests",
         "min_free_gb": 2,              # pause recording below this free space
+        "highlights_retention_days": 30,  # delete non-favorite highlights older than N days
     },
     # ------------------------------------------------------------------
     # Web server (runs on the phone; LAN devices browse to it)
@@ -159,11 +165,15 @@ class Config:
 
 
 def load_config(config_file: str | Path | None = None) -> Config:
-    data: dict[str, Any] = dict(DEFAULTS)
+    # deepcopy：_apply_env / _deep_merge 会原地修改嵌套 dict，
+    # 浅拷贝会把环境变量写穿到模块级 DEFAULTS
+    data: dict[str, Any] = copy.deepcopy(DEFAULTS)
+    # 候选顺序即合并顺序（后合并者优先）：config.yaml 先、user_config.yaml
+    # 后，保证用户个性化配置最终生效
     candidates = [
         Path(config_file) if config_file else None,
-        REPO_ROOT / "user_config.yaml",
         REPO_ROOT / "config.yaml",
+        REPO_ROOT / "user_config.yaml",
     ]
     for c in candidates:
         if c and Path(c).is_file():

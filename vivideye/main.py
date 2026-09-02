@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import logging
 import signal
+import socket
 import sys
 import threading
 import time
@@ -47,14 +48,20 @@ def cmd_start(args: argparse.Namespace) -> int:
     recorder = Recorder(db=db)
     service = PipelineService(db=db)
 
-    # Web 服务器为可选组件：模块未就绪时跳过并提示，不影响其余服务
+    # Web 服务器为可选组件：启动/探测失败只告警，不影响录制与管线
     web_server: Any = None
     try:
         from vivideye.server.app import create_app
         web_server = _start_web_server(create_app())
-        logger.info("Web 服务已启动：http://%s:%s",
-                    config.get("server.host", "0.0.0.0"),
-                    config.get("server.port", 8666))
+        if web_server is not None and web_server.started:
+            logger.info("Web 服务已启动：http://%s:%s",
+                        config.get("server.host", "0.0.0.0"),
+                        config.get("server.port", 8666))
+        elif web_server is not None:
+            logger.warning("Web 服务端口探测失败（%s:%s），Web 服务未就绪；"
+                           "录制与管线不受影响",
+                           config.get("server.host", "0.0.0.0"),
+                           config.get("server.port", 8666))
     except ImportError:
         logger.warning("未找到 vivideye.server.app（Web 模块未就绪），已跳过 Web 服务")
     except Exception:
@@ -93,15 +100,56 @@ def cmd_start(args: argparse.Namespace) -> int:
 
 
 def _start_web_server(app: Any) -> Any:
-    """用标准库 wsgiref 在后台线程提供 Web 服务（WSGI app，不引入额外依赖）。"""
-    from wsgiref.simple_server import make_server
+    """在后台线程用 uvicorn 启动 Web 服务器，返回可 shutdown() 的句柄。
 
+    - 仅支持 uvicorn：FastAPI 是 ASGI 应用，wsgiref 兜底必然 500，
+      已移除（uvicorn 缺失时仅告警跳过）；
+    - 启动后主动探测端口，确认真的在监听才认为成功（``handle.started``）；
+    - 任何失败只告警，不影响录制与管线。
+    """
     from vivideye.config import config
-    server = make_server(str(config.get("server.host", "0.0.0.0")),
-                         int(config.get("server.port", 8666)), app)
-    threading.Thread(target=server.serve_forever,
-                     name="vivideye-web", daemon=True).start()
-    return server
+    host = str(config.get("server.host", "0.0.0.0"))
+    port = int(config.get("server.port", 8666))
+
+    try:
+        import uvicorn
+    except ImportError:
+        logger.warning("uvicorn 未安装，已跳过 Web 服务（录制与管线不受影响）")
+        return None
+
+    server = uvicorn.Server(
+        uvicorn.Config(app, host=host, port=port, log_level="warning"))
+    threading.Thread(target=server.run, name="vivideye-web",
+                     daemon=True).start()
+    started = _wait_port(host, port, timeout=10.0)
+    return _WebServerHandle(server, started)
+
+
+def _wait_port(host: str, port: int, timeout: float = 10.0) -> bool:
+    """轮询探测 TCP 端口，确认 Web 服务真的开始监听才返回 True。"""
+    probe_host = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((probe_host, port), timeout=1.0):
+                return True
+        except OSError:
+            time.sleep(0.2)
+    return False
+
+
+class _WebServerHandle:
+    """uvicorn 服务器的关闭句柄（started 标记端口探测是否成功）。"""
+
+    def __init__(self, server: Any, started: bool):
+        self._server = server
+        self.started = started
+
+    def shutdown(self) -> None:
+        try:
+            self._server.should_exit = True
+        except Exception:
+            pass
 
 
 # ----------------------------------------------------------------------

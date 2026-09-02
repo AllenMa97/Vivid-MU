@@ -3,7 +3,8 @@
 流程：
 1. 从数据库取当天（本地时区）的 highlights，按 score 降序排列；
 2. 渲染 Markdown（榜单、统计、金句 caption）；
-3. 写入 ``storage.digest_dir``（文件名 digest_YYYY-MM-DD.md）；
+3. 写入 ``storage.digest_dir``（文件名 digest-YYYY-MM-DD.md，连字符，
+   与 Web 端日报命名统一）；
 4. ``save_digest`` 入库（同一天重复生成会覆盖更新）。
 """
 
@@ -14,7 +15,7 @@ import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from vivideye.config import Config, config
 from vivideye.paths import resolve_path
@@ -50,7 +51,7 @@ def generate_digest(date: str | None = None,
 
     digest_dir = resolve_path(cfg.get("storage.digest_dir", "data/digests"), cfg)
     digest_dir.mkdir(parents=True, exist_ok=True)
-    out_path = digest_dir / f"digest_{date}.md"
+    out_path = digest_dir / f"digest-{date}.md"
     out_path.write_text(markdown, encoding="utf-8")
 
     db.save_digest(date, str(out_path), stats)
@@ -92,14 +93,29 @@ def _fmt_time(ts: Any) -> str:
 
 
 def _build_stats(highlights: list[dict]) -> dict:
-    """汇总当天统计：数量、总时长、平均分、高频标签与出镜主体。"""
+    """汇总当天统计：数量、总时长、平均分、高频标签与出镜主体。
+
+    stats 键与 Web 端日报统一：``total`` 为高光总数、``top`` 为得分
+    最高的 5 条摘要（入参需已按 score 降序）；同时保留旧键
+    ``highlight_count`` 以兼容历史数据。
+    """
     n = len(highlights)
     total = sum(float(h.get("duration") or 0) for h in highlights)
     avg = (sum(float(h.get("score") or 0) for h in highlights) / n) if n else 0.0
     tags = Counter(t for h in highlights for t in (h.get("tags") or []))
     subjects = Counter(s for h in highlights for s in (h.get("subjects") or []))
     return {
-        "highlight_count": n,
+        "total": n,
+        "highlight_count": n,        # 旧键，兼容历史数据
+        "top": [
+            {
+                "title": h.get("title") or "",
+                "score": h.get("score") or 0,
+                "time": _fmt_time(h.get("started_at")),
+                "tags": h.get("tags") or [],
+            }
+            for h in highlights[:5]
+        ],
         "total_duration": round(total, 1),
         "avg_score": round(avg, 3),
         "top_tags": tags.most_common(5),

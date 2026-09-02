@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -43,8 +43,11 @@ _SENSITIVE_KEYS = {"api_key"}
 # 打码占位符：前端原样提交该值时服务端直接忽略（不覆盖真实密钥）
 _MASK = "******"
 
-# /api/config 允许写入的顶层配置段（白名单，防止脏数据入库）
-_ALLOWED_SECTIONS = {"app", "capture", "pipeline", "ai", "storage", "server"}
+# /api/config 允许写入的顶层配置段（白名单，防止脏数据入库）。
+# 收紧到键级（S3）：storage.* 与 ai.api_base / ai.provider 等敏感字段一律
+# 只读——GET 仍可展示，POST 一律忽略并在响应里提示；ai 段仅 api_key 可写。
+_ALLOWED_SECTIONS = {"app", "capture", "pipeline", "server"}
+_AI_WRITABLE_KEYS = {"api_key"}
 
 # 合法的场景模式
 _SCENE_MODES = {"auto", "pet", "kid", "home"}
@@ -130,11 +133,19 @@ def _recording_status(app: FastAPI) -> dict:
     优先级：
       1) 采集器心跳文件 data/recorder.json（capture 模块持续写入）
       2) 兜底启发式：raw 目录最近 1.5 个分片周期内有文件写入 → 录制中
+
+    心跳命中时顺带透传 paused / last_file，供前端推断"未录制"的原因
+    （磁盘水位暂停 / 摄像头无信号）。
     """
     now = time.time()
     hb = _read_json(app.state.data_dir / "recorder.json")
     if hb.get("updated_at") and now - float(hb["updated_at"]) < 300:
-        return {"recording": bool(hb.get("recording")), "source": "heartbeat"}
+        return {
+            "recording": bool(hb.get("recording")),
+            "source": "heartbeat",
+            "paused": bool(hb.get("paused")),
+            "last_file": hb.get("last_file"),
+        }
 
     seg = float(config.get("capture.segment_seconds", 600) or 600)
     newest = 0.0
@@ -157,19 +168,24 @@ def _recording_status(app: FastAPI) -> dict:
 def _pipeline_available() -> bool:
     """pipeline 编排模块是否可导入（未部署时返回 False）。"""
     try:
-        from vivideye.pipeline.orchestrator import process_now  # noqa: F401
+        from vivideye.pipeline.orchestrator import PipelineService  # noqa: F401
         return True
     except Exception:
         return False
 
 
 def _pipeline_status(app: FastAPI) -> dict:
-    """pipeline 状态：可用性 / 是否运行中 / 最近一次运行信息。"""
+    """pipeline 状态：可用性 / 是否运行中 / 最近一次运行信息。
+
+    running 同时看进程内标志与 data/pipeline_state.json（后台线程写入），
+    便于 /api/status 在触发线程存活期间乃至服务重启后都能如实展示。
+    """
     info = _read_json(app.state.data_dir / "pipeline_state.json")
     last_run = info.get("last_run")
     return {
         "available": _pipeline_available(),
-        "running": bool(getattr(app.state, "pipeline_running", False)),
+        "running": bool(getattr(app.state, "pipeline_running", False))
+        or bool(info.get("running")),
         "last_run": last_run,
         "last_run_str": (
             datetime.fromtimestamp(float(last_run)).strftime("%m-%d %H:%M")
@@ -179,21 +195,43 @@ def _pipeline_status(app: FastAPI) -> dict:
     }
 
 
+def _write_pipeline_state(state_file: Path, payload: dict) -> None:
+    """合并写入 pipeline 状态文件（保留未涉及的字段；失败只打日志）。"""
+    merged = _read_json(state_file)
+    merged.update(payload)
+    try:
+        state_file.write_text(json.dumps(merged, ensure_ascii=False),
+                              encoding="utf-8")
+    except OSError as e:
+        logger.warning("pipeline 状态文件写入失败：%s", e)
+
+
 def _run_pipeline_thread(app: FastAPI) -> None:
-    """后台线程：调用 pipeline 的 process_now 并落一份状态文件。"""
+    """后台线程：调用 PipelineService.process_now 并维护状态文件。
+
+    - 复用 app.state.db 传给 PipelineService（连接生命周期归 Web 服务管，
+      此处绝不 close）；
+    - 连 BaseException 也兜底（L6）：任何异常路径都要复位 pipeline_running
+      并把 running=false 落盘，仅 KeyboardInterrupt 保持穿透语义。
+    """
     state_file = app.state.data_dir / "pipeline_state.json"
+    payload: dict = {"running": False, "last_run": time.time(),
+                     "last_result": None, "last_error": None}
     try:
-        from vivideye.pipeline.orchestrator import process_now
-        result = process_now()
-        payload = {"last_run": time.time(), "last_result": str(result), "last_error": None}
-    except Exception as e:  # noqa: BLE001 —— 任何失败都要记录并回报给 UI
+        _write_pipeline_state(state_file,
+                              {"running": True, "last_run": time.time()})
+        from vivideye.pipeline.orchestrator import PipelineService
+        svc = PipelineService(db=app.state.db)
+        result = svc.process_now()
+        payload["last_result"] = str(result)
+    except KeyboardInterrupt:
+        raise
+    except BaseException as e:  # noqa: BLE001 —— 任何失败都要复位状态并回报 UI
         logger.exception("立即处理执行失败")
-        payload = {"last_run": time.time(), "last_result": None, "last_error": str(e)}
-    try:
-        state_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        pass
-    app.state.pipeline_running = False
+        payload["last_error"] = str(e)
+    finally:
+        app.state.pipeline_running = False           # L6：保证复位
+        _write_pipeline_state(state_file, payload)   # L5：running/last_run 落盘
 
 
 # ============================================================================
@@ -224,13 +262,14 @@ def _fmt_time(h: dict) -> str:
     return ""
 
 
-def _build_fallback_digest(date_str: str, highlights: "list[dict]") -> dict:
-    """AI 不可用/超时的本地模板日报（结构与 ai.digest 保持一致）。"""
+def _build_stats(date_str: str, highlights: "list[dict]") -> dict:
+    """当日统计（AI 版与降级模板共用；total/highlight_count 双键兼容缓存契约）。"""
     scores = [float(h.get("score") or 0) for h in highlights]
     top = sorted(highlights, key=lambda h: float(h.get("score") or 0), reverse=True)[:5]
-    stats = {
+    return {
         "date": date_str,
         "total": len(highlights),
+        "highlight_count": len(highlights),
         "favorite": sum(1 for h in highlights if h.get("favorite")),
         "avg_score": round(sum(scores) / len(scores), 3) if scores else 0.0,
         "max_score": round(max(scores), 3) if scores else 0.0,
@@ -244,6 +283,11 @@ def _build_fallback_digest(date_str: str, highlights: "list[dict]") -> dict:
             for h in top
         ],
     }
+
+
+def _build_fallback_digest(date_str: str, highlights: "list[dict]") -> dict:
+    """AI 不可用/超时的本地模板日报（结构与 ai.digest 保持一致）。"""
+    stats = _build_stats(date_str, highlights)
     if highlights:
         lines = [
             f"# 🐾 萌眼日报 · {date_str}",
@@ -272,26 +316,68 @@ def _build_fallback_digest(date_str: str, highlights: "list[dict]") -> dict:
     return {"markdown_text": "\n".join(lines), "stats": stats}
 
 
-def _generate_digest(date_str: str, highlights: "list[dict]") -> dict:
-    """生成日报：优先调用 AI 故事化生成，失败/超时降级本地模板。"""
+def _cache_digest(db: HighlightsDB | None, digest_dir: Path | None,
+                  date_str: str, result: dict) -> None:
+    """日报落盘 + 入库（INSERT OR REPLACE，可随新高光刷新；失败只打日志）。"""
+    if db is None or digest_dir is None:
+        return
+    try:
+        digest_dir.mkdir(parents=True, exist_ok=True)
+        md_path = digest_dir / f"digest-{date_str}.md"
+        md_path.write_text(result["markdown_text"], encoding="utf-8")
+        db.save_digest(date_str, str(md_path), result["stats"])
+    except Exception as e:  # noqa: BLE001 —— 缓存失败不影响返回
+        logger.warning("日报缓存写入失败：%s", e)
+
+
+def _generate_digest(date_str: str, highlights: "list[dict]",
+                     db: HighlightsDB | None = None,
+                     digest_dir: Path | None = None) -> dict:
+    """生成日报：优先 AI 故事化正文，失败/超时降级本地模板。
+
+    AI 调用跑在 daemon 工作线程里，主线程最多等 ``_DIGEST_TIMEOUT_SECONDS``
+    （M4：不再为每次请求新建一个执行器线程）；超时立即降级返回，但线程
+    继续跑完并把结果落缓存（写盘 + 入库），下次请求即可命中 AI 版。
+    """
     try:
         from vivideye.ai.digest import generate_daily_digest
-    except Exception as e:  # AI 模块不可导入（依赖缺失等）
+    except ModuleNotFoundError as e:  # AI 模块文件不存在（未部署）
+        logger.warning("AI 日报模块未部署（%s），使用本地模板", e)
+        result = _build_fallback_digest(date_str, highlights)
+        _cache_digest(db, digest_dir, date_str, result)
+        return result
+    except Exception as e:  # 模块存在但导入期出错（依赖缺失等）
         logger.warning("AI 日报模块不可用（%s），使用本地模板", e)
-        return _build_fallback_digest(date_str, highlights)
+        result = _build_fallback_digest(date_str, highlights)
+        _cache_digest(db, digest_dir, date_str, result)
+        return result
 
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ve-digest")
-    try:
-        future = executor.submit(generate_daily_digest, date_str, highlights)
+    fallback = _build_fallback_digest(date_str, highlights)
+    box: dict = {}
+    done = threading.Event()
+
+    def _worker() -> None:
         try:
-            return future.result(timeout=_DIGEST_TIMEOUT_SECONDS)
-        except FuturesTimeoutError:
-            future.cancel()
-            logger.warning("AI 日报生成超时（%.0fs），降级本地模板 date=%s",
-                           _DIGEST_TIMEOUT_SECONDS, date_str)
-            return _build_fallback_digest(date_str, highlights)
-    finally:
-        executor.shutdown(wait=False)
+            text = generate_daily_digest(
+                highlights, str(config.get("app.language", "zh_CN")))
+        except Exception as e:  # noqa: BLE001 —— AI 侧异常一律降级
+            logger.warning("AI 日报生成失败：%s", e)
+            text = ""
+        result = ({"markdown_text": text, "stats": fallback["stats"]}
+                  if text else fallback)
+        box["result"] = result
+        _cache_digest(db, digest_dir, date_str, result)  # 跑完即落缓存
+        done.set()
+
+    threading.Thread(target=_worker, daemon=True,
+                     name="ve-digest").start()
+    if done.wait(_DIGEST_TIMEOUT_SECONDS):
+        return box.get("result") or fallback
+    # 超时：立即降级返回但不落缓存——后台线程跑完后会写入 AI 版，
+    # 避免本地模板覆盖它导致 AI 结果永远无法生效。
+    logger.warning("AI 日报生成超时（%.0fs），降级本地模板 date=%s",
+                   _DIGEST_TIMEOUT_SECONDS, date_str)
+    return fallback
 
 
 # ============================================================================
@@ -355,6 +441,9 @@ def create_app() -> FastAPI:
             "db": db.stats(),
             "disk_free": usage.free,
             "disk_free_gb": round(usage.free / 1024 ** 3, 2),
+            # 是否已配置 AI 密钥（仅布尔，不回传 key 本身）：
+            # 前端空状态据此引导用户去设置页粘贴 API Key
+            "has_api_key": bool(str(config.get("ai.api_key") or "").strip()),
             "server_time": datetime.now().isoformat(timespec="seconds"),
         }
 
@@ -459,16 +548,10 @@ def create_app() -> FastAPI:
                         return {"date": date_str, "markdown": md,
                                 "stats": stats, "cached": True}
 
-        result = _generate_digest(date_str, day_items)
+        # 缓存落盘由 _generate_digest 内部（或其工作线程）负责
+        result = _generate_digest(date_str, day_items,
+                                  db, request.app.state.digest_dir)
         md_text, stats = result["markdown_text"], result["stats"]
-
-        # 落盘 + 入库（INSERT OR REPLACE，可随新高光刷新）
-        try:
-            md_path = request.app.state.digest_dir / f"digest-{date_str}.md"
-            md_path.write_text(md_text, encoding="utf-8")
-            db.save_digest(date_str, str(md_path), stats)
-        except Exception as e:  # 缓存失败不影响返回
-            logger.warning("日报缓存写入失败：%s", e)
         return {"date": date_str, "markdown": md_text, "stats": stats, "cached": False}
 
     # ------------------------------------------------------------------
@@ -481,13 +564,35 @@ def create_app() -> FastAPI:
 
     @app.post("/api/config")
     def api_config_post(request: Request, payload: dict[str, Any]) -> dict:
-        """更新 user_config.yaml（增量深合并），并热更新内存配置。"""
+        """更新 user_config.yaml（增量深合并），并热更新内存配置。
+
+        键级白名单（S3）：storage.* 与 ai 段除 api_key 外的字段（如
+        ai.api_base / ai.provider）一律只读——GET 仍可展示，POST 忽略并提示。
+        """
         if not isinstance(payload, dict) or not payload:
             raise HTTPException(status_code=400, detail="请求体必须是非空 JSON 对象")
 
-        # 白名单过滤 + 剔除打码占位（防止掩码覆盖真实密钥）
-        updates = _strip_masked({k: v for k, v in payload.items()
-                                 if k in _ALLOWED_SECTIONS})
+        # 键级白名单过滤：可写段整段放行；ai 段仅放行 api_key；其余只读
+        updates: dict[str, Any] = {}
+        ignored: list[str] = []
+        for section, body in payload.items():
+            if section in _ALLOWED_SECTIONS:
+                updates[section] = body
+            elif section == "ai":
+                if isinstance(body, dict):
+                    kept = {k: v for k, v in body.items()
+                            if k in _AI_WRITABLE_KEYS}
+                    ignored += [f"ai.{k}" for k in body
+                                if k not in _AI_WRITABLE_KEYS]
+                    if kept:
+                        updates["ai"] = kept
+                else:
+                    ignored.append("ai")
+            else:
+                ignored.append(str(section))
+
+        # 剔除打码占位（防止掩码覆盖真实密钥）
+        updates = _strip_masked(updates)
 
         # 场景模式合法性校验（提前给出友好错误）
         scene = (updates.get("pipeline") or {}).get("scene_mode")
@@ -495,7 +600,10 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400,
                                 detail=f"scene_mode 仅支持 {' / '.join(sorted(_SCENE_MODES))}")
         if not updates:
-            return {"ok": False, "message": "没有可更新的配置项",
+            message = "没有可更新的配置项"
+            if ignored:
+                message += f"（只读字段已忽略：{', '.join(ignored)}）"
+            return {"ok": False, "message": message,
                     "config": _mask_sensitive(config.as_dict())}
 
         user_path = REPO_ROOT / "user_config.yaml"
@@ -508,18 +616,28 @@ def create_app() -> FastAPI:
                                     detail=f"user_config.yaml 解析失败：{e}")
 
         merged = _deep_merge(existing, updates)
-        user_path.write_text(
-            yaml.safe_dump(merged, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
+        # 原子写（M10）：先写临时文件再 os.replace，避免读到写一半的配置
+        tmp_path = user_path.with_name(user_path.name + ".tmp")
+        try:
+            tmp_path.write_text(
+                yaml.safe_dump(merged, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            os.replace(tmp_path, user_path)
+        except OSError:
+            tmp_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500,
+                                detail="user_config.yaml 写入失败")
 
-        # 热更新内存单例：原地替换 _data，所有已 import 的引用立即生效
-        fresh = load_config().as_dict()
-        config._data.clear()
-        config._data.update(fresh)
+        # 热更新内存单例：一次性替换 _data 引用（原子操作，
+        # 避免 clear+update 两步之间被其他线程读到半截配置）
+        config._data = load_config().as_dict()
 
         logger.info("配置已更新，涉及的顶层段：%s", ", ".join(updates.keys()))
-        return {"ok": True, "message": "配置已保存",
+        message = "配置已保存"
+        if ignored:
+            message += f"（只读字段已忽略：{', '.join(ignored)}）"
+        return {"ok": True, "message": message,
                 "config": _mask_sensitive(config.as_dict())}
 
     # ------------------------------------------------------------------

@@ -52,8 +52,16 @@ if [ "${SELF_DIR#"$HOME"}" = "$SELF_DIR" ]; then
     err "         termux-setup-storage 并在弹窗中点了“允许”（一次性授权）"
     exit 1
   fi
-  # Termux 基础环境自带 tar；保险起见缺失时先补装
-  command -v tar >/dev/null 2>&1 || pkg install -y tar
+  # Termux 基础环境自带 tar；缺失时先补装，装不上给出明确排查提示
+  if ! command -v tar >/dev/null 2>&1; then
+    if pkg install -y tar; then
+      ok "已安装：tar"
+    else
+      err "tar 安装失败（多为网络/镜像问题），无法解压项目"
+      err "建议：运行 termux-change-repo 选择镜像（如清华 TUNA）后，重新执行本脚本"
+      exit 1
+    fi
+  fi
   TARGET="$HOME/vivideye"
   mkdir -p "$TARGET"
   info "解压 $TARBALL -> $TARGET ..."
@@ -166,9 +174,7 @@ cat <<'EOF'
    #   2) export VIVIDEYE_AI__API_KEY=sk-xxx   （建议写入 ~/.bashrc）
 
    # 启动主服务（Web 界面端口 8666）：
-   vivideye main start
-   # 若提示找不到 vivideye 命令，尝试：
-   python -m vivideye main start
+   python main.py start
 --------------------------------------------------------------
  别忘记（本项目 = 手机自己拍自己）：
    1) 打开手机上的 IP Webcam 应用 → 启动视频服务器（默认端口 8080）

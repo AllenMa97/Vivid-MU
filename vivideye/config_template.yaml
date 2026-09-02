@@ -22,8 +22,12 @@ capture:
   record_audio: true
   audio_url: http://127.0.0.1:8080/audio.wav  # optional separate audio stream
   segment_seconds: 600        # one file per 10 minutes
-  video_codec: copy           # copy | h264 (h264 if source is unstable)
-  retention_hours: 72         # delete raw files older than 3 days
+  video_codec: copy           # copy | h264（实验性，P20 可能发热）
+  # 原始切片保留时长（小时）：原始片段体积 ≈ 摄像头码率 × 时长，是存储
+  # 占用的大头；默认 24h 仅作为高光提取的时间窗口，过期自动删除。
+  # （高光与收藏单独保存，不受此清理影响；P20 存储有限建议保持默认，
+  #   空间充裕可适当调大。）
+  retention_hours: 24
   restart_on_failure: true
   watchdog_seconds: 60        # restart recorder if no new file appears
 

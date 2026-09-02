@@ -162,6 +162,11 @@ class PipelineService:
     # ------------------------------------------------------------------
     def start(self) -> None:
         """启动管线（内部创建并启动调度线程，幂等）。"""
+        # 复位陈旧的 processing 片段：上次运行崩溃/被杀会让片段永远卡在
+        # processing（pending_segments 不会取到它），超过 1 小时的复位为 new
+        reset = self._db.reset_stale_processing()
+        if reset:
+            logger.info("已把 %d 个陈旧的 processing 片段复位为 new", reset)
         if self._scheduler is None:
             from vivideye.pipeline.scheduler import PipelineScheduler
             self._scheduler = PipelineScheduler(
@@ -306,9 +311,17 @@ class PipelineService:
         return self._ai_client
 
     def _normalize_result(self, raw: Any) -> dict[str, Any]:
-        """把 AI 返回值规范成内部结构，字段异常时给安全默认值。"""
+        """把 AI 返回值规范成内部结构，字段异常时给安全默认值。
+
+        AI 软失败（返回非空 ``error`` 字段，如配额耗尽、连续解析失败）
+        时抛 ``PipelineError``：由单段处理的异常兜底捕获，片段标
+        ``failed`` 并跳过（不导出高光、绝不标 done），不再静默吞掉。
+        """
         if not isinstance(raw, dict):
             raise PipelineError(f"AI 返回了意外类型：{type(raw).__name__}")
+        error = str(raw.get("error") or "").strip()
+        if error:
+            raise PipelineError(f"AI 分析软失败：{error}")
         score = _to_num(raw.get("score"))
         score = 0.0 if score is None else max(0.0, min(1.0, score))
         title = str(raw.get("title") or "").strip() or "未命名高光"

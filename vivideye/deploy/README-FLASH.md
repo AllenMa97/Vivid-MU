@@ -259,7 +259,7 @@ make doctor            # 检查 Termux 进程 / 8666(Web) / 8080(IP Webcam)，�
 # Termux 中：
 cd ~/vivideye && source .venv/bin/activate
 export VIVIDEYE_AI__API_KEY=sk-xxx        # 或编辑 user_config.yaml
-vivideye main start                        # 或 python -m vivideye main start
+python main.py start
 ```
 
 然后打开 **IP Webcam → 启动视频服务器**（8080）。同一 WiFi 下任意设备访问
@@ -276,7 +276,7 @@ vivideye main start                        # 或 python -m vivideye main start
 | `pkg update` 卡住/失败 | 网络问题：`termux-change-repo` 换镜像（国内推荐 TUNA/清华） |
 | pip 装 Pillow 失败 | `pkg install -y build-essential binutils libjpeg-turbo zlib` 后重跑 |
 | 8080 连不上 | IP Webcam 未点"启动视频服务器" |
-| 8666 连不上 | Termux 里没启动主服务（`vivideye main start`） |
+| 8666 连不上 | Termux 里没启动主服务（`python main.py start`） |
 | 挂机几小时后断流 | EMUI 杀后台：重做 2A-5（启动管理 + 最近任务上锁） |
 | 手机发烫/掉电快 | 正常（持续录像）；建议插电 + 智能充电；夏天注意散热 |
 

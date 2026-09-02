@@ -20,7 +20,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# 发往云端的最大帧数（600 秒 @0.5fps = 300 帧，需均匀抽样限流）
+# 发往云端的最大帧数（600 秒 @0.5fps = 300 帧；ffmpeg 侧按
+# max_frames/duration 反算等效 fps + ``-frames:v`` 硬性限流，
+# 避免超长片段全量解码浪费 CPU/内存）
 DEFAULT_MAX_FRAMES = 60
 # 抽帧缩放宽度（像素），足够 VLM 理解画面且省流量
 FRAME_WIDTH = 640
@@ -63,20 +65,32 @@ def sample_frames(video_path: str | Path, fps: float = 0.5,
     """从片段抽帧，返回 base64 编码的 JPEG 列表。
 
     - 按 ``fps`` 抽帧并缩放到 ``FRAME_WIDTH`` 宽；
-    - 超过 ``max_frames`` 时做等间隔抽样（保留首尾帧）；
+    - ``max_frames`` 限量解码（默认 60）：先按片段时长把 fps 反算收紧
+      到 ``max_frames / duration``（保证帧均匀覆盖整个片段），再用
+      ``-frames:v`` 硬性封顶，600s 片段不会全量解码出 300 帧；
     - 帧数据通过 image2pipe 从 ffmpeg stdout 直读，无中间文件。
     """
     video_path = Path(video_path)
     fps = max(0.05, float(fps or 0.5))
-    proc = _run_ffmpeg([
-        "-i", str(video_path),
-        "-vf", f"fps={fps},scale={FRAME_WIDTH}:-2",
+    effective_fps = fps
+    if max_frames and int(max_frames) > 0:
+        duration = probe_duration(video_path)
+        if duration and duration > 0:
+            # 反算等效 fps：整段均匀覆盖最多 max_frames 帧所需的采样率
+            effective_fps = max(0.01, min(fps, int(max_frames) / duration))
+    args: list[str] = ["-i", str(video_path)]
+    if max_frames and int(max_frames) > 0:
+        args += ["-frames:v", str(int(max_frames))]
+    args += [
+        "-vf", f"fps={effective_fps},scale={FRAME_WIDTH}:-2",
         "-q:v", "5",
         "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
-    ])
+    ]
+    proc = _run_ffmpeg(args)
     jpegs = _split_mjpeg(proc.stdout)
     if not jpegs:
         raise SamplerError(f"未能从片段抽取到任何帧：{video_path}")
+    # 兜底：时长探测失败/取整误差导致超量时，内存内等间隔抽样（保留首尾）
     if max_frames and len(jpegs) > max_frames:
         jpegs = _even_pick(jpegs, max_frames)
     logger.info("片段 %s 抽帧 %d 张（fps=%.2f）", video_path.name, len(jpegs), fps)

@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 
 _SCHEMA = """
@@ -62,9 +62,13 @@ class HighlightsDB:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        # timeout=30：录制/管线/Web 多线程并发写时等待锁而非立刻报
+        # "database is locked"；WAL 模式允许读写并发
+        self._conn = sqlite3.connect(str(self.db_path), timeout=30,
+                                     check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         with self._lock:
+            self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
 
@@ -94,6 +98,22 @@ class HighlightsDB:
                 "SELECT * FROM segments WHERE status='new' "
                 "ORDER BY started_at ASC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
+
+    def reset_stale_processing(self, stale_seconds: float = 3600.0) -> int:
+        """把卡在 processing 的陈旧片段复位为 new，返回复位条数。
+
+        管线进程崩溃/被杀会让片段永远停在 processing（pending_segments
+        不会取到它）。以 created_at 计龄，超过 ``stale_seconds``（默认
+        1 小时）视为陈旧；由 PipelineService 启动时调用。
+        """
+        cutoff = time.time() - float(stale_seconds)
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE segments SET status='new' "
+                "WHERE status='processing' AND created_at < ?",
+                (cutoff,))
+            self._conn.commit()
+            return cur.rowcount
 
     # ------------------------------------------------------------------
     # highlights
@@ -161,6 +181,22 @@ class HighlightsDB:
         with self._lock:
             self._conn.execute("DELETE FROM highlights WHERE id=?", (hid,))
             self._conn.commit()
+
+    def expired_highlights(self, before: float, limit: int = 1000) -> list[dict]:
+        """列出 created_at 早于 before 且未收藏的高光（供保留期清理）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM highlights WHERE favorite=0 AND created_at < ? "
+                "ORDER BY created_at ASC LIMIT ?", (before, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_highlight_by_path(self, video_path: str | Path) -> int:
+        """按 video_path 删除高光记录（保留期清理用），返回删除条数。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM highlights WHERE video_path=?", (str(video_path),))
+            self._conn.commit()
+            return cur.rowcount
 
     def stats(self) -> dict:
         with self._lock:

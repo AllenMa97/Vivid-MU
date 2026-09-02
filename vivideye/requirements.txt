@@ -1,0 +1,16 @@
+# VividEye dependencies (phone-friendly, Termux-tested set)
+# Python >= 3.10
+
+# --- core ---
+PyYAML>=6.0
+requests>=2.31
+
+# --- web server (runs on the phone; LAN devices access it) ---
+fastapi>=0.110
+uvicorn>=0.29
+httpx>=0.27
+
+# --- optional: local NN inference (NOT recommended on P20, default off) ---
+# onnxruntime>=1.17
+# numpy>=1.26
+# pillow>=10.0

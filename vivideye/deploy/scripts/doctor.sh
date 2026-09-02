@@ -84,7 +84,7 @@ CODE="$(curl -s -o /dev/null -m 6 -w '%{http_code}' 'http://127.0.0.1:8666/' || 
 if [ -n "$CODE" ] && [ "$CODE" != "000" ]; then
   record ok "VividEye Web(8666)" "HTTP $CODE（服务存活，已通过 adb forward 映射到 PC 的 127.0.0.1:8666）"
 else
-  record fail "VividEye Web(8666)" "无法连接 → 在手机 Termux 中执行：cd ~/vivideye && source .venv/bin/activate && vivideye main start"
+  record fail "VividEye Web(8666)" "无法连接 → 在手机 Termux 中执行：cd ~/vivideye && source .venv/bin/activate && python main.py start"
 fi
 
 # ================= 检查 4/4：IP Webcam 视频服务（8080） =================
@@ -107,7 +107,10 @@ fi
 DF="$(adb_sh df -h /data | tail -n 1 || true)"
 [ -n "$DF" ] && info "手机 /data 分区：$DF（注意为 72h 滚动录像留足空间）"
 FORWARDS="$(adb forward --list 2>/dev/null || true)"
-[ -n "$FORWARDS" ] && info "当前 adb 端口转发：\n$FORWARDS"
+if [ -n "$FORWARDS" ]; then
+  info "当前 adb 端口转发："
+  printf '%s\n' "$FORWARDS"
+fi
 
 # ================= 汇总 =================
 echo

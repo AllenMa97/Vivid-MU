@@ -10,13 +10,18 @@ PHONE-FIRST / Termux 设计要点：
 - 内置管理线程（daemon）负责：
   * 把已完成的片段注册进数据库（供管线取用）；
   * 看门狗：活跃文件长时间无写入则重启 ffmpeg（capture.watchdog_seconds）；
-  * 崩溃自动重启（capture.restart_on_failure）；
-  * 磁盘水位：低于 storage.min_free_gb 时暂停录制，恢复后自动续录。
+  * 崩溃自动重启（capture.restart_on_failure，连续失败按指数退避，
+    避免 ffmpeg 秒退形成重启风暴）；
+  * 磁盘水位：低于 storage.min_free_gb 时暂停录制，恢复后自动续录；
+  * 心跳：周期性把 status() 快照原子写入 data_dir/recorder.json，
+    供 Web 状态接口读取。
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 import shutil
 import signal
@@ -42,6 +47,12 @@ _SEG_TIME_FMT = "%Y%m%d_%H%M%S"
 _TICK_SECONDS = 5.0
 # 磁盘水位 / 保留期清理的执行周期（秒）
 _RETENTION_INTERVAL = 60.0
+# 重启退避（S4）：连续失败按指数退避，5s→10s→20s→40s…封顶 300s，
+# 避免 ffmpeg 秒退时形成重启风暴
+_BACKOFF_BASE_SECONDS = 5.0
+_BACKOFF_CAP_SECONDS = 300.0
+# 会话稳定运行超过该秒数视为健康，连续失败计数归零
+_BACKOFF_RESET_RUNTIME = 60.0
 
 
 def _parse_seg_time(name: str) -> Optional[datetime]:
@@ -101,6 +112,14 @@ class Recorder:
         self._last_retention_at = 0.0
         self._last_error = ""
         self._stderr_tail: list[str] = []
+        self._last_file: Optional[str] = None     # 最新片段文件名（心跳用）
+
+        # 重启退避（S4）：连续失败计数 + 下次允许 spawn 的时间点
+        self._fail_count = 0
+        self._spawned_at: Optional[float] = None
+        self._restart_not_before = 0.0
+        # 状态心跳文件（黑盒bug2）：与 DB 同目录，供 Web 状态接口读取
+        self._status_path = self._db.db_path.parent / "recorder.json"
 
         # 看门狗：跟踪“本次 ffmpeg 会话”正在写入的活跃文件
         self._baseline_names: set[str] = set()    # 本次 spawn 前已存在的文件（不算活跃）
@@ -136,6 +155,8 @@ class Recorder:
             self._manager = None
         # ffmpeg 退出后最后一个活跃文件也已收尾，补注册
         self._register_segments(self._list_seg_files(), final=True)
+        # 管理线程已 join，写一份 recording=false 的终态心跳供 Web 读取
+        self._write_status()
         logger.info("录制器已停止（累计重启 %d 次，注册片段 %d 个）",
                     self._restarts, self._registered_count)
 
@@ -153,6 +174,7 @@ class Recorder:
             "started_at": self._started_at,
             "restarts": self._restarts,
             "segments_registered": self._registered_count,
+            "last_file": self._last_file,
             "last_output_at": self._last_output_at,
             "seconds_since_last_output": (
                 now - self._last_output_at if self._last_output_at else None),
@@ -179,10 +201,14 @@ class Recorder:
     def _tick(self) -> None:
         now = time.time()
         self._maybe_retention(now)
+        # 每 tick 落盘状态心跳（含暂停/退避期间的终态），供 Web 读取
+        self._write_status()
         if self._paused:
             return
 
         files = self._list_seg_files()
+        if files:
+            self._last_file = max(files)          # 文件名含时间戳，字典序即时间序
         # 注册已完成片段（活跃文件除外）
         self._register_segments(files, final=False)
 
@@ -192,7 +218,7 @@ class Recorder:
                 # ffmpeg 异常退出（主动停止时会先置 None）
                 self._on_ffmpeg_exit(proc)
             if _as_bool(self._cfg.get("capture.restart_on_failure", True)):
-                self._spawn()
+                self._spawn_with_backoff(now)
             else:
                 self._last_error = "ffmpeg 已退出且 restart_on_failure=false，录制停止"
                 logger.error(self._last_error)
@@ -210,7 +236,7 @@ class Recorder:
         if now - self._last_retention_at < _RETENTION_INTERVAL:
             return
         self._last_retention_at = now
-        report = run_retention(cfg=self._cfg)
+        report = run_retention(cfg=self._cfg, db=self._db)
         self._last_retention = report
         if report.disk_ok:
             if self._paused:
@@ -236,9 +262,11 @@ class Recorder:
         with_audio = _as_bool(cfg.get("capture.record_audio", True)) and bool(audio_url)
 
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+               "-use_wallclock_as_timestamps", "1",
                "-f", "mjpeg", "-i", source]
         if with_audio:
-            cmd += ["-f", "wav", "-i", audio_url]
+            cmd += ["-use_wallclock_as_timestamps", "1",
+                    "-f", "wav", "-i", audio_url]
 
         cmd += ["-map", "0:v:0"]
         if with_audio:
@@ -251,6 +279,8 @@ class Recorder:
         if with_audio:
             # wav(pcm) 流无法直拷进 mp4，统一转码为低码率 aac
             cmd += ["-c:a", "aac", "-b:a", "64k"]
+            # 双流模式：以较短流为准收尾，避免音频流持续拉长 mp4 切片
+            cmd += ["-shortest"]
 
         cmd += ["-f", "segment",
                 "-segment_time", str(seg_seconds),
@@ -286,29 +316,65 @@ class Recorder:
         self._active_size = -1
         # spawn 时刻作为看门狗起点：超时仍无任何新文件/写入则视为流断开
         self._last_output_at = time.time()
+        # 会话起点：用于“稳定运行超过 60s 则退避计数归零”的判定
+        self._spawned_at = self._last_output_at
+
+    def _spawn_with_backoff(self, now: float) -> None:
+        """按退避计划重启 ffmpeg：退避窗口内只记日志、暂不 spawn。"""
+        remaining = self._restart_not_before - now
+        if remaining > 0:
+            logger.info("ffmpeg 重启退避中：%.0f 秒后进行第 %d 次重试（连续失败 %d 次）",
+                        remaining, self._fail_count, self._fail_count)
+            return
+        self._spawn()
+
+    def _register_failure(self, now: float) -> float:
+        """记录一次 ffmpeg 会话失败，计算下次重试延迟（指数退避）。
+
+        上个会话稳定运行超过 ``_BACKOFF_RESET_RUNTIME`` 秒时计数归零，
+        偶发退出不会被长退避惩罚。返回本次应等待的秒数。
+        """
+        if (self._spawned_at is not None
+                and now - self._spawned_at > _BACKOFF_RESET_RUNTIME):
+            self._fail_count = 0
+        self._fail_count += 1
+        delay = min(_BACKOFF_BASE_SECONDS * 2 ** (self._fail_count - 1),
+                    _BACKOFF_CAP_SECONDS)
+        self._restart_not_before = now + delay
+        return delay
 
     def _on_ffmpeg_exit(self, proc: subprocess.Popen) -> None:
-        """ffmpeg 非正常退出后的记录（是否重启由调用方决定）。"""
+        """ffmpeg 非正常退出后的记录（是否/何时重启由调用方决定）。"""
         code = proc.poll()
         self._last_error = (
             f"ffmpeg 异常退出（code={code}）："
             + (" | ".join(self._stderr_tail[-3:]) if self._stderr_tail else "无 stderr 输出"))
         self._restarts += 1
         self._proc = None
-        logger.warning("%s，%s", self._last_error,
-                       "即将自动重启"
-                       if _as_bool(self._cfg.get("capture.restart_on_failure", True))
-                       else "restart_on_failure=false")
+        if _as_bool(self._cfg.get("capture.restart_on_failure", True)):
+            delay = self._register_failure(time.time())
+            logger.warning("%s，即将自动重启（连续失败 %d 次，%.0f 秒后重试）",
+                           self._last_error, self._fail_count, delay)
+        else:
+            logger.warning("%s，restart_on_failure=false", self._last_error)
 
     def _kill_proc(self, graceful_timeout: float = 5.0) -> None:
-        """结束 ffmpeg：先 SIGINT（优雅收尾 mp4），超时再升级 SIGTERM/SIGKILL。"""
+        """结束 ffmpeg：先 SIGINT（优雅收尾 mp4），超时再升级 SIGTERM/SIGKILL。
+
+        wait 后显式关闭 stderr 管道：drain 线程只负责读取不负责关闭，
+        否则每个 ffmpeg 会话都会泄漏一个文件描述符（M7）。
+        """
         proc = self._proc
         self._proc = None
-        if proc is None or proc.poll() is not None:
+        if proc is None:
+            return
+        if proc.poll() is not None:               # 已退出，只需收尾管道
+            self._close_stderr(proc)
             return
         try:
             proc.send_signal(signal.SIGINT)
             proc.wait(timeout=graceful_timeout)
+            self._close_stderr(proc)
             return
         except subprocess.TimeoutExpired:
             pass
@@ -323,6 +389,38 @@ class Recorder:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
+        self._close_stderr(proc)
+
+    @staticmethod
+    def _close_stderr(proc: subprocess.Popen) -> None:
+        """显式关闭 ffmpeg 的 stderr 管道（幂等，重复关闭/异常忽略）。"""
+        try:
+            if proc.stderr is not None:
+                proc.stderr.close()
+        except (OSError, ValueError):
+            pass
+
+    # ------------------------------------------------------------------
+    # 状态心跳（黑盒bug2）
+    # ------------------------------------------------------------------
+    def _write_status(self) -> None:
+        """把 status() 快照原子写入 data_dir/recorder.json，供 Web 读取。
+
+        recording = 服务在运行 且 未暂停 且 ffmpeg 进程存活；退避等待/
+        暂停期间为 False，Web 端不会误报“录制中”。tmp + os.replace 原子写，
+        读方永远不会看到半截 JSON。
+        """
+        snapshot = self.status()
+        snapshot["recording"] = bool(snapshot["running"]
+                                     and snapshot["ffmpeg_pid"] is not None)
+        snapshot["updated_at"] = time.time()
+        tmp = self._status_path.with_name(self._status_path.name + ".tmp")
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, ensure_ascii=False)
+            os.replace(tmp, self._status_path)
+        except OSError as e:
+            logger.warning("写入录制状态心跳失败：%s", e)
 
     def _drain_stderr(self, proc: subprocess.Popen) -> None:
         """持续读取 ffmpeg stderr，保留末尾若干行用于错误诊断。"""
@@ -416,6 +514,11 @@ class Recorder:
             logger.warning("看门狗触发：%.0f 秒无任何写入，重启 ffmpeg",
                            now - self._last_output_at)
             self._restarts += 1
+            # 看门狗重启同样计入指数退避（S4）：流断开时连续重启会
+            # 越退越慢，避免风暴
+            delay = self._register_failure(now)
+            logger.info("看门狗重启退避：%.0f 秒后重试（连续失败 %d 次）",
+                        delay, self._fail_count)
             self._kill_proc()
             self._last_output_at = None
             self._active_name = None

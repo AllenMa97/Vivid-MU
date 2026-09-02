@@ -338,7 +338,7 @@ ${C_GRN}============================================================
    2. PC 上体检： cd deploy && make doctor
    3. 手机 Termux 里启动主服务：
         cd ~/vivideye && source .venv/bin/activate
-        vivideye main start        # Web 界面: http://<手机IP>:8666
+        python main.py start       # Web 界面: http://<手机IP>:8666
    4. 手机上打开 IP Webcam → 启动视频服务器（默认端口 8080）
 ============================================================${C_RST}
 EOF

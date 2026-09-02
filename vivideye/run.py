@@ -1,5 +1,8 @@
 """VividEye Web 服务启动入口（uvicorn）。
 
+注意：本入口仅启动 Web 服务，不含录制与管线；常驻运行
+（录制 + 管线 + Web）请使用 python main.py start。
+
 用法（手机 Termux 内，项目根目录下执行）：
     python run.py                 # 前台运行
     nohup python run.py &         # 后台常驻

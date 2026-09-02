@@ -65,8 +65,9 @@
         <button class="btn ghost small" id="btn-live-retry">重新连接</button>
       </div>
       <div class="live-frame" id="live-frame">
-        <!-- MJPEG 直出：浏览器 <img> 原生支持 multipart 流 -->
-        <img id="live-img" alt="实时画面" src="/api/live">
+        <!-- MJPEG 直出：浏览器 <img> 原生支持 multipart 流。
+             src 由 app.js 的 enterLive 懒加载设置（进入实时页才拉流） -->
+        <img id="live-img" alt="实时画面">
         <div class="live-offline hidden" id="live-offline">
           <div class="empty-emoji">📷</div>
           <div class="empty-title">暂时连不上摄像头</div>

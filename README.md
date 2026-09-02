@@ -89,7 +89,8 @@ Step 3 (AI编辑) → Step3输出文件夹 → 最终视频
 
 ### Step 2: 语义过滤器 (Semantic Filter)
 - **目的**: 对 Step 1 输出的片段进行更深入的语义分析
-- **功能**: 人脸识别、语音检测、场景多样性分析、细粒度过滤、语义总结
+- **功能**: 人脸识别、语音检测(VAD)、场景多样性分析、**YOLO 物体级语义特征(宠物/人物/互动)**、语义总结
+- **神经网络特征层**: YOLO 目标检测 / CLIP 场景语义 / Silero VAD 通过 `src/models/` 下的 ONNX 模型推理, 全部经 `src/device_manager.py` 在 **CPU/NPU/GPU** 上自动调度
 - **输出**: `data/output/step2_output/`
 
 ### Step 3: AI视频编辑器 (AI Video Editor)
@@ -134,6 +135,25 @@ project_root/
 - ImageHash - 图像相似度检测
 - Pillow - 图像处理
 - httpx - API请求处理
+- ONNX Runtime - 神经网络特征层推理 (YOLO / CLIP / Silero VAD)
+
+## 🧠 神经网络特征层与多设备调度
+
+Step 2 的语义特征来自本地 ONNX 模型推理 (不再仅靠启发式或云端 LLM):
+
+| 模型 | 产出特征 | 设备偏好 (可在 user_config.txt 覆盖) |
+|---|---|---|
+| YOLOv8n 目标检测 | 宠物在场、宠物数量、人宠互动、玩具、动作强度 | NPU/GPU (INT8) |
+| CLIP 场景语义 *(可选)* | 真实语义多样性 / 独特性 embedding | GPU |
+| Silero VAD | 语音活动检测 | CPU |
+| OpenCV 人脸检测 | 人脸数量/大小/居中 | 自动 |
+
+**多设备调度** (`src/device_manager.py`):
+- 启动时自动探测 ONNX Runtime (CUDA/DirectML/CoreML/TensorRT) 与 OpenVINO (CPU/iGPU/NPU)
+- 按模型分组策略选择目标设备, 推理失败自动降级到 CPU (保证纯 CPU 也能跑)
+- 下载模型: `python download_models.py` (YOLO/人脸/VAD); 可选 CLIP: `python download_models.py --with-clip`
+
+**选择算法** (`src/selector.py`): 支持带约束的选择 (总时长背包 + 片段最小间隔 + 语义多样性去重), 新增 `pet` 策略优先保留宠物行为/人宠互动丰富的场景。
 
 ## 📖 详细使用说明
 

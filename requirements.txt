@@ -9,8 +9,11 @@ soundfile>=0.12.0
 # Step 2 dependencies (for API calls)
 httpx>=0.25.0
 
+# 神经网络特征层 (P1/P2): YOLO 目标检测 / CLIP / Silero VAD 推理
+onnxruntime>=1.16.0
+
 # Optional dependencies (for advanced features)
-# Uncomment if you want to use CLIP model for scene classification
-# onnxruntime>=1.16.0
-# Uncomment if you want to use VAD (Voice Activity Detection)
+# Uncomment if you want to use OpenVINO to run models on Intel CPU/iGPU/NPU
+# openvino>=2024.0.0
+# Uncomment if you want to use PyTorch-based features
 # torch>=2.0.0

@@ -43,3 +43,14 @@ MAX_RETRIES=3                        # 请求失败重试次数
 # 输出配置
 SUMMARY_MAX_LENGTH=200               # 每个片段摘要的最大长度
 OUTPUT_LANGUAGE=zh_CN                # 摘要输出语言
+
+# ========================================
+# 神经网络特征层 & 多设备调度 (以下键为小写, 供 src/config.py 解析)
+# 复制到 user_config.txt 即可生效
+# ========================================
+# device_policy= yolo:auto,clip:auto,vad:cpu,face:auto   # 模型分组 → 目标设备 (auto/cpu/gpu/npu)
+# yolo_enabled=true                                       # 是否启用 YOLO 物体检测
+# yolo_conf=0.25                                          # YOLO 置信度阈值
+# use_constrained_selection=true                          # 是否启用带约束的选择 (间隔+多样性)
+# min_gap=3.0                                             # 片段最小时间间隔(秒)
+# diversity_threshold=0.92                                # 语义相似度去重阈值(0-1)

@@ -105,7 +105,10 @@ img { max-width: 100%; }
 
 .chip#chip-record.rec { color: var(--ok); border-color: #CBE8CF; }
 
-/* 录制状态灯：绿点呼吸 / 灰点静止 */
+/* 服务未响应态（状态接口拉取失败）：红点 + 红字 */
+.chip#chip-record.err { color: var(--danger); border-color: #F5C6C8; }
+
+/* 录制状态灯：绿点呼吸 / 灰点静止 / 红点异常 */
 .dot {
   width: 8px;
   height: 8px;
@@ -119,6 +122,8 @@ img { max-width: 100%; }
   box-shadow: 0 0 0 0 rgba(62, 155, 79, 0.5);
   animation: pulse 1.8s infinite;
 }
+
+.dot.err { background: var(--danger); }
 
 @keyframes pulse {
   0%   { box-shadow: 0 0 0 0 rgba(62, 155, 79, 0.45); }
@@ -361,6 +366,9 @@ img { max-width: 100%; }
 
 .empty-sub { margin: 6px 0 18px; color: var(--muted); font-size: 0.85rem; }
 
+/* 空状态按钮组（如"去设置粘贴 API Key"+"刷新看看"） */
+.empty .btn + .btn { margin-left: 10px; }
+
 /* ---------- 加载更多 ---------- */
 .more-wrap { text-align: center; margin: 18px 0 8px; }
 
@@ -511,6 +519,9 @@ img { max-width: 100%; }
 .digest-body a { color: var(--accent-deep); }
 
 .digest-error { text-align: center; color: var(--danger); padding: 30px 0; }
+
+/* 日报空状态：当天还没有素材 */
+.digest-empty { text-align: center; color: var(--muted); padding: 40px 0; font-size: 0.9rem; }
 
 /* ---------- 设置卡片 ---------- */
 .card {

@@ -169,12 +169,12 @@ cat <<'EOF'
    cd ~/vivideye
    source .venv/bin/activate
 
-   # 配置 AI 密钥（二选一）：
-   #   1) 编辑 user_config.yaml，填写 ai.api_key
-   #   2) export VIVIDEYE_AI__API_KEY=sk-xxx   （建议写入 ~/.bashrc）
-
    # 启动主服务（Web 界面端口 8666）：
    python main.py start
+
+   # 配置 AI 密钥（推荐）：启动后用浏览器打开
+   #   http://<手机IP>:8666 →「设置」页 → API Key 输入框粘贴并保存
+   # 进阶方式：export VIVIDEYE_AI__API_KEY=sk-xxx（写入 ~/.bashrc 可持久化）
 --------------------------------------------------------------
  别忘记（本项目 = 手机自己拍自己）：
    1) 打开手机上的 IP Webcam 应用 → 启动视频服务器（默认端口 8080）

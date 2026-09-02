@@ -99,6 +99,7 @@
 
 > 提醒：若开启了"查找我的手机"，恢复后开机会要求输入原华为账号密码（激活锁），属正常安全机制。
 > 恢复后首次开机 5~15 分钟属正常，勿断电。
+> **注意**：恢复出厂会清除开发人员选项与 USB 调试授权——需重新开启 USB 调试并重新授权电脑（即重做上方 2A-1 的第 2~4 步），PC 才能再次 `adb` 连接。
 
 ### 2A-3 精简预装应用（`pm uninstall --user 0`）
 
@@ -292,3 +293,9 @@ python main.py start
 | `scripts/doctor.sh` | 部署后体检（3.2） |
 | `scripts/flash/reset-emui.sh` | 恢复出厂/三清助手（2A-2，危险操作二次确认） |
 | `apks/README.md` | 需自行下载放置的 APK 清单与版权说明 |
+
+---
+
+## Windows 用户
+
+本工具包脚本均为 bash：Windows 用户可使用 **Git Bash** 或 **WSL** 运行，命令与本指南完全一致（如 `bash scripts/deploy.sh`、`make deploy`；adb 需自行安装并加入 PATH）。

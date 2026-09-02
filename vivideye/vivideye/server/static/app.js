@@ -24,6 +24,7 @@ const state = {
   current: null,          // 播放弹层当前高光（state.items 内的引用）
   digestDate: todayStr(), // 日报日期
   cfg: null,               // /api/config 返回（密钥已打码）
+  status: null,            // /api/status 最近一次返回（空状态三态判定用）
 };
 
 /* ============================================================
@@ -192,15 +193,27 @@ function renderMarkdown(md) {
 /* ============================================================
  * 顶部状态栏
  * ============================================================ */
+
+/** "未录制"原因推断（数据源：recorder.json 心跳透传的 paused / last_file） */
+function recordReason(rec) {
+  if (rec.paused) return '磁盘空间不足';
+  if (rec.last_file) return '摄像头无信号';
+  return '未检测到摄像头';
+}
+
 async function loadStatus() {
   try {
     const s = await fetchJSON('/api/status');
+    state.status = s;
 
-    // 录制状态灯
+    // 录制状态灯：录制中=绿点；未录制=灰点 + 尽量带上原因
     const rec = s.recording || {};
-    $('#record-dot').classList.toggle('on', !!rec.recording);
-    $('#record-text').textContent = rec.recording ? '录制中' : '待机';
-    $('#chip-record').classList.toggle('rec', !!rec.recording);
+    const on = !!rec.recording;
+    $('#record-dot').classList.toggle('on', on);
+    $('#record-dot').classList.remove('err');
+    $('#chip-record').classList.toggle('rec', on);
+    $('#chip-record').classList.remove('err');
+    $('#record-text').textContent = on ? '录制中' : `未录制 · ${recordReason(rec)}`;
 
     // 今日高光数 / 磁盘
     const today = (s.db && s.db.highlights_today) || 0;
@@ -214,10 +227,18 @@ async function loadStatus() {
     else if (p.last_run_str) {
       ps.textContent = `上次处理：${p.last_run_str}` + (p.last_error ? ' · 上次出错' : '');
     } else {
-      ps.textContent = p.available ? '还没有处理记录' : 'pipeline 模块未部署';
+      ps.textContent = p.available ? '还没有处理记录' : 'AI 分析模块未就绪';
     }
+
+    // 状态就绪后刷新一次空状态文案（首屏可能与列表加载竞争）
+    if (!state.items.length) renderHighlights();
   } catch (_) {
-    /* 状态获取失败静默处理，不打扰用户 */
+    // 状态拉取失败：红点明确提示服务未响应，不再静默
+    $('#record-dot').classList.remove('on');
+    $('#record-dot').classList.add('err');
+    $('#chip-record').classList.remove('rec');
+    $('#chip-record').classList.add('err');
+    $('#record-text').textContent = '服务未响应';
   }
 }
 
@@ -249,26 +270,80 @@ async function loadHighlights(reset = false) {
   }
 }
 
+/** 正常等待态提示：下一批分析预计 xx:xx（last_run + run_interval 推算）+ 原有温馨文案 */
+function nextRunHint() {
+  const p = (state.status && state.status.pipeline) || {};
+  const interval = Number(
+    (state.cfg && state.cfg.pipeline && state.cfg.pipeline.run_interval_minutes)) || 30;
+  const warm = '毛孩子们正在酝酿精彩…';
+  if (p.running) return `AI 分析进行中，${warm}`;
+  const last = Number(p.last_run);
+  if (!last) return `每 ${interval} 分钟自动分析一批，${warm}`;
+  const next = new Date((last + interval * 60) * 1000);
+  if (next <= new Date()) return `下一批分析马上开始，${warm}`;
+  const hm = `${String(next.getHours()).padStart(2, '0')}:${String(next.getMinutes()).padStart(2, '0')}`;
+  return `下一批分析预计 ${hm}，${warm}`;
+}
+
+/** 高光墙空状态文案（三态：未配 AI Key / 未在录制 / 正常等待） */
+function emptyStateCopy() {
+  if (state.favoriteOnly) {
+    return { emoji: '💛', title: '还没有收藏的高光', sub: '看到喜欢的瞬间，点亮小红心吧' };
+  }
+  const st = state.status;
+  if (!st) {   // 状态未就绪：先给温馨文案，loadStatus 回来后会刷新
+    return { emoji: '🐾', title: '今天还没有高光时刻', sub: '毛孩子们正在酝酿精彩…' };
+  }
+  // 1) 未配置 AI Key（优先 /api/status.has_api_key，/api/config 掩码兜底）
+  const cfgKey = state.cfg && state.cfg.ai && state.cfg.ai.api_key;
+  const hasKey = st.has_api_key === true
+    || (cfgKey && cfgKey !== '******' && String(cfgKey).trim() !== '');
+  if (!hasKey) {
+    return {
+      emoji: '🔑',
+      title: '还没配置 AI 分析',
+      sub: '去设置页粘贴 API Key，就能自动挑选高光时刻啦',
+      goSettings: true,
+    };
+  }
+  // 2) 未在录制：多半是摄像头侧没启动
+  if (!(st.recording && st.recording.recording)) {
+    return {
+      emoji: '📷',
+      title: '摄像头未工作',
+      sub: '检查 IP Webcam 是否启动，启动后就会开始录制',
+    };
+  }
+  // 3) 一切正常，等待下一批分析
+  return { emoji: '🐾', title: '今天还没有高光时刻', sub: nextRunHint() };
+}
+
 /** 渲染高光墙（网格 + 空状态 + 加载更多） */
 function renderHighlights() {
   $('#hl-grid').innerHTML = state.items.map(cardHTML).join('');
 
-  // 空状态：收藏视图与普通视图给不同文案
+  // 空状态：收藏视图 / 未配Key / 未在录制 / 正常等待
   const empty = $('#hl-empty');
   const showEmpty = state.items.length === 0;
   empty.classList.toggle('hidden', !showEmpty);
   if (showEmpty) {
-    $('#empty-emoji').textContent = state.favoriteOnly ? '💛' : '🐾';
-    $('#empty-title').textContent = state.favoriteOnly
-      ? '还没有收藏的高光' : '今天还没有高光时刻';
-    $('#empty-sub').textContent = state.favoriteOnly
-      ? '看到喜欢的瞬间，点亮小红心吧' : '毛孩子们正在酝酿精彩…';
+    const copy = emptyStateCopy();
+    $('#empty-emoji').textContent = copy.emoji;
+    $('#empty-title').textContent = copy.title;
+    $('#empty-sub').textContent = copy.sub;
+    $('#btn-empty-settings').classList.toggle('hidden', !copy.goSettings);
   }
 
   $('#more-wrap').classList.toggle(
     'hidden', !(state.hasMore && state.items.length));
   $('#hl-count').textContent = state.items.length
     ? `已加载 ${state.items.length} 条` : '';
+}
+
+/** 分数（0~1）→ 五星展示（整星四舍五入），如 0.85 → ★★★★☆ */
+function scoreStars(score) {
+  const n = Math.min(5, Math.max(0, Math.round((Number(score) || 0) * 5)));
+  return '★'.repeat(n) + '☆'.repeat(5 - n);
 }
 
 /** 单张高光卡片 HTML（内容一律 esc 转义） */
@@ -294,7 +369,7 @@ function cardHTML(h) {
       ${h.caption ? `<p class="hl-caption">${esc(h.caption)}</p>` : ''}
       <div class="hl-meta">
         <span>${fmtTime(ts)}</span>
-        ${score ? `<span class="hl-score">⭐ ${score.toFixed(2)}</span>` : ''}
+        ${score ? `<span class="hl-score" title="评分 ${score.toFixed(2)}">${scoreStars(score)}</span>` : ''}
       </div>
       ${tags ? `<div class="hl-tags">${tags}</div>` : ''}
     </div>
@@ -428,7 +503,15 @@ async function loadDigest() {
   $('#digest-body').innerHTML = '';
   try {
     const data = await fetchJSON(`/api/digest?date=${encodeURIComponent(state.digestDate)}`);
-    $('#digest-body').innerHTML = renderMarkdown(data.markdown || '');
+    // 空状态：当天还没有任何高光素材，给出可操作的提示
+    const total = (data.stats && (data.stats.total ?? data.stats.highlight_count)) || 0;
+    if (!total) {
+      const when = state.digestDate === todayStr() ? '今天' : '这天';
+      $('#digest-body').innerHTML =
+        `<div class="digest-empty">${when}还没有素材，先确认摄像头在工作哦</div>`;
+    } else {
+      $('#digest-body').innerHTML = renderMarkdown(data.markdown || '');
+    }
   } catch (e) {
     $('#digest-body').innerHTML =
       `<div class="digest-error">日报加载失败：${esc(e.message)}</div>`;
@@ -458,6 +541,8 @@ async function loadConfigIntoUI(force = false) {
   try {
     state.cfg = await fetchJSON('/api/config');
     applyConfigToUI();
+    // 配置就绪后空状态文案可能变化（Key 判断 / 下一批分析时间）
+    if (!state.items.length) renderHighlights();
   } catch (e) {
     toast('读取配置失败：' + e.message);
   }
@@ -552,6 +637,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loadHighlights(false);
   });
   $('#btn-empty-refresh').addEventListener('click', () => loadHighlights(true));
+  // 未配 Key 空状态的一键直达设置页
+  $('#btn-empty-settings').addEventListener('click', () => switchTab('settings'));
 
   // —— 播放弹层 ——
   $('#player-close').addEventListener('click', closePlayer);
@@ -582,6 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // —— 初始加载 ——
   loadStatus();
+  loadConfigIntoUI();          // 空状态三态需要（Key 判断 / 分析周期）
   loadHighlights(true);
   setInterval(loadStatus, 10000); // 状态栏每 10 秒自动刷新
 });

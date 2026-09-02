@@ -43,11 +43,12 @@
     <!-- 高光卡片网格（JS 动态渲染） -->
     <div class="grid" id="hl-grid"></div>
 
-    <!-- 空状态 -->
+    <!-- 空状态（JS 按三态渲染：未配 API Key / 摄像头未工作 / 正常等待） -->
     <div class="empty hidden" id="hl-empty">
       <div class="empty-emoji" id="empty-emoji">🐾</div>
       <div class="empty-title" id="empty-title">今天还没有高光时刻</div>
       <div class="empty-sub" id="empty-sub">毛孩子们正在酝酿精彩…</div>
+      <button class="btn ghost hidden" id="btn-empty-settings">去设置粘贴 API Key</button>
       <button class="btn ghost" id="btn-empty-refresh">刷新看看</button>
     </div>
 

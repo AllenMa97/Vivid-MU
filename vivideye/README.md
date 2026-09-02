@@ -31,8 +31,8 @@
 ┌──────────────────── Huawei P20 · Termux ────────────────────┐
 │                                                              │
 │  IP Webcam app ─▶ ffmpeg ─▶ 10-min segments ─▶ frame        │
-│  (the eye)         slicing     rolling buffer    sampling   │
-│                   (loopback      (72 h)         (0.5 fps)   │
+│                   slicing     rolling buffer    sampling   │
+│                   (loopback      (24 h)         (0.5 fps)   │
 │                    MJPEG :8080)                              │
 └──────────────────────────────┬───────────────────────────────┘
                                │  only sampled frames
@@ -129,18 +129,18 @@ Open `http://<phone-ip>:8666` from your phone, laptop, or TV browser:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `capture.retention_hours` | 72 h | Raw segments older than this are deleted (rolling buffer) |
+| `capture.retention_hours` | 24 h | Raw segments older than this are deleted (rolling buffer) |
 | `storage.highlights_retention_days` | 30 days | Non-favorite highlights older than this are deleted; favorites kept forever |
 | `storage.min_free_gb` | 2 GB | Recording pauses when free space drops below this, resumes automatically |
 
 **Capacity math (640×480 MJPEG ≈ 1–3 GB/h):**
 
-| Resolution | Per hour | 72 h rolling buffer |
+| Resolution | Per hour | 24 h rolling buffer |
 |---|---|---|
-| 640×480 (recommended) | ~1–3 GB | ~24–90 GB |
-| 1280×720 | ~2–5 GB | ~48–150 GB — too much for a P20 |
+| 640×480 (recommended) | ~1–3 GB | ~8–30 GB |
+| 1280×720 | ~2–5 GB | ~16–50 GB — still heavy for a P20 |
 
-A P20 has 64–128 GB total storage, so at high resolutions lower `capture.retention_hours` (e.g., 24) in `user_config.yaml` or drop the resolution in the IP Webcam app. Highlights themselves are tiny (seconds-long clips). `python main.py status` shows disk level and pending segments at any time.
+A P20 has 64–128 GB total storage, so the default keeps only 24 h of raw footage (storage safety first). Raise `capture.retention_hours` in `user_config.yaml` only if you have space to spare, or drop the resolution in the IP Webcam app. Highlights themselves are tiny (seconds-long clips). `python main.py status` shows disk level and pending segments at any time.
 
 ## 🔁 After a Reboot
 
@@ -172,7 +172,7 @@ Copy [`config_template.yaml`](config_template.yaml) to `user_config.yaml` (git-i
 |---|---|---|
 | `capture.source_url` | `http://127.0.0.1:8080/video` | Loopback MJPEG stream from the camera app |
 | `capture.segment_seconds` | 600 | Length of each raw segment |
-| `capture.retention_hours` | 72 | Rolling buffer window for raw footage |
+| `capture.retention_hours` | 24 | Rolling buffer window for raw footage |
 | `pipeline.run_interval_minutes` | 30 | How often new segments get analyzed |
 | `pipeline.max_segments_per_run` | 8 | Batch size per run (phone- and wallet-friendly) |
 | `pipeline.min_highlight_score` | 0.55 | Minimum AI score to save a highlight |
@@ -190,6 +190,7 @@ Full defaults live in [`vivideye/config.py`](vivideye/config.py).
 ## 🗺️ Roadmap
 
 - 🎥 Multi-camera support (several old phones, one wall of highlights)
+- 🕹️ Multi-view "bullet time": several devices in the corners of a room doing multi-angle capture with distributed compute/storage, reconstructing a highlight into an NBA-style 3D freeze-frame moment
 - 🧠 Local small models (ONNX) for fully offline inference on stronger phones
 - 📱 A thin app shell for the web UI
 - 🌍 Secure remote access recipe (Tailscale/WireGuard guide)

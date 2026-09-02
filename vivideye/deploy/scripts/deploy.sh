@@ -340,5 +340,8 @@ ${C_GRN}============================================================
         cd ~/vivideye && source .venv/bin/activate
         python main.py start       # Web 界面: http://<手机IP>:8666
    4. 手机上打开 IP Webcam → 启动视频服务器（默认端口 8080）
+   5. 配置 AI 密钥（推荐）：浏览器打开 http://<手机IP>:8666
+      →「设置」页 → API Key 输入框粘贴并保存
+      （进阶方式：export VIVIDEYE_AI__API_KEY=sk-xxx）
 ============================================================${C_RST}
 EOF

@@ -23,6 +23,20 @@ capture:
   audio_url: http://127.0.0.1:8080/audio.wav  # optional separate audio stream
   segment_seconds: 600        # one file per 10 minutes
   video_codec: copy           # copy | h264（实验性，P20 可能发热）
+  # 多机位列表（子弹时间用）。每项：name=机位名，url=该机位 MJPEG 流，
+  # audio_url=可选独立音频流（null 表示无音频）。
+  # 为空（默认）时回退单机位：使用上面的 source_url，机位名 "main"，
+  # 片段仍 flat 写入 data/raw/seg_*.mp4（向后兼容）；
+  # 非空时每机位独立 ffmpeg 进程，片段写 data/raw/<name>/seg_*.mp4。
+  # 示例：
+  # cameras:
+  #   - name: cam1
+  #     url: http://192.168.1.10:8080/video
+  #     audio_url: null
+  #   - name: cam2
+  #     url: http://192.168.1.11:8080/video
+  #     audio_url: http://192.168.1.11:8080/audio.wav
+  cameras: []
   # 原始切片保留时长（小时）：原始片段体积 ≈ 摄像头码率 × 时长，是存储
   # 占用的大头；默认 24h 仅作为高光提取的时间窗口，过期自动删除。
   # （高光与收藏单独保存，不受此清理影响；P20 存储有限建议保持默认，
@@ -78,6 +92,23 @@ storage:
   raw_dir: data/raw
   digest_dir: data/digests
   min_free_gb: 2              # pause recording when free space drops below
+
+# ---------------------------------------------------------------------
+# Bullet time — 子弹时间：高光时刻的多机位环绕回放。
+# 多机位（capture.cameras 非空）时用各机位真实帧拼接环绕；
+# 单机位时对单帧做数字变焦+平移合成虚拟机位角度。
+# ---------------------------------------------------------------------
+bullet_time:
+  enabled: true               # 总开关：关闭后 CLI/自动流程跳过渲染
+  min_score: 0.75             # 仅对 score >= 该阈值的高光渲染
+  virtual_angles: 8           # 单机位虚拟机位角度数
+  virtual_mode: auto          # auto | real | virtual
+                              #   auto: >=2 真机位用真帧，仅 1 机位合成虚拟角度
+                              #   real: 只用真机位帧（<2 帧不渲染）
+                              #   virtual: 强制虚拟机位合成
+  duration_seconds: 4         # 成片时长（秒）
+  style: pingpong             # pingpong | rotate（角度序列风格）
+  zoom_motion: true           # 每个角度内做缓慢推镜（zoompan，CPU 略增）
 
 server:
   host: 0.0.0.0               # serve on LAN; open http://<phone-ip>:8666

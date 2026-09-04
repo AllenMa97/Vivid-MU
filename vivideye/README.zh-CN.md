@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/made_with-%F0%9F%92%9B-yellow" alt="Made with 💛">
 </p>
 
-**VividEye** 把一台旧安卓手机（在华为 P20 上开发实测）变成养宠/有娃家庭的 AI 高光摄像机：7×24 小时不停录制，云端大模型只看抽出来的少量帧来打分筛选，把真正值得回味的瞬间留下来，配上每天一页的"萌眼日报"；家人用家里任意设备的浏览器就能回看——而所有视频文件，始终只存在你自己手机里，不出家门。
+**VividEye** 把一台旧安卓手机（在华为 P20 上开发实测）变成养宠/有娃家庭的 AI 高光摄像机：7×24 小时不停录制，云端大模型只看抽出来的少量帧来打分筛选，把真正值得回味的瞬间留下来，配上每天一页的"萌眼日报"；家人用家里任意设备的浏览器就能回看——而所有视频文件，始终只存在你自己手机里，不出家门。得分最高的瞬间还会自动合成**"子弹时间"**旋转短片：在房间四角多摆几台旧手机组成机位阵列，就能从每个角度重看那一跳。
 
 <p align="center">
   <video src="docs/promo_vivideye.mp4" controls muted playsinline width="800" poster="docs/promo_hero.jpg"></video>
@@ -43,7 +43,8 @@
 ┌─────────────────────────────┴───────────────────────────────┐
 │  高光库（mp4 + 缩略图 + SQLite 数据库）                     │
 │  日报（Markdown，AI 撰写，超时自动降级本地模板）            │
-│                              │                              │
+│  子弹时间短片（旋转视角，score ≥ 0.75 自动合成）            │
+│                              │                               │
 │                    FastAPI Web 界面（:8666）                │
 └─────────────────────────────┬───────────────────────────────┘
                               ▼
@@ -115,10 +116,59 @@ VividEye 的"大脑"默认用阿里云百炼（DashScope，通义千问系列）
 手机往角落一架，剩下的就是打开 `http://<手机IP>:8666`（手机、平板、电脑、电视浏览器都行）：
 
 - **✨ 高光墙** —— 卡片式瀑布流：缩略图 + AI 写的标题、评分和标签；点开播放，可以 ❤️ 收藏或 🗑️ 删除
+- **⚡ 子弹时间** —— 评分 ≥ 0.75 的高光会自动合成一段旋转视角短片；认准卡片上的 ⚡ 徽章和播放弹层里的"播放子弹时间"按钮（详见 [🎬 子弹时间](#-子弹时间)）
 - **❤️ 收藏** —— 收藏的高光**永不**被自动清理，是真正的"家庭相册"
 - **📹 实时画面** —— 随时看一眼摄像头当下在拍什么
 - **📖 日报** —— 每天一页，AI 把当天的精彩瞬间写成一篇小故事
-- **⚙️ 设置** —— 场景模式（自动/宠物/萌娃/居家）、API Key，以及**"立即处理"按钮**：不想等 30 分钟定时任务时，点它马上分析最新录像
+- **⚙️ 设置** —— 场景模式（自动/宠物/萌娃/居家）、API Key、子弹时间开关与阈值，以及**"立即处理"按钮**：不想等 30 分钟定时任务时，点它马上分析最新录像
+
+## 🎬 子弹时间
+
+<p align="center">
+  <img src="docs/bullettime_hero.jpg" alt="子弹时间 —— 围绕精彩瞬间合成的旋转视角短片" width="800">
+</p>
+
+当 AI 给某段录像打出 **≥ 0.75** 的高分时，VividEye 会自动围绕其中最长的一段精彩时刻，合成一小段**旋转视角的"子弹时间"短片**——NBA 转播那种"立体暂停"式的定格环绕——并挂到对应的高光上。全程无需手动操作：卡片会亮起 ⚡ 徽章，播放弹层里多一个 **⚡ 播放子弹时间** 按钮（再点一次切回原视频）。
+
+**触发条件（全部满足才会合成）：**
+
+- `bullet_time.enabled` 开着（默认开，设置页可关），**且**
+- 该片段 AI 评分 ≥ `bullet_time.min_score`（默认 `0.75`，设置页有滑杆），**且**
+- AI 明确给出了 `moments` 精彩时间段——取其中最长的一段作为旋转中心。
+
+**效果说明（诚实版）：**
+
+| 部署方式 | 效果 |
+|---|---|
+| **多机位** —— 房间里摆 N 台旧手机（`capture.cameras`） | 真正的多角度环绕：短片在定格瞬间从不同手机的视角间旋转切换 |
+| **单机位**（默认） | 虚拟机位环绕：靠数字变焦 + 平移在唯一一个真实视角上"合成"出旋转感。观感不错，但**不是**真正的三维重建——这一点我们如实说明 |
+
+**多机位配置示例**（`user_config.yaml`）——每台手机和主机一样装 Termux + IP Webcam，各自的片段落在 `data/raw/<机位名>/` 下：
+
+```yaml
+capture:
+  cameras:
+    - name: sofa-north        # 任意名字，用作片段子目录名和日志
+      url: http://192.168.1.23:8080/video    # 那台手机的 IP Webcam 视频流
+      audio_url: null         # 可选的独立音频流
+    - name: sofa-east
+      url: http://192.168.1.24:8080/video
+      audio_url: http://192.168.1.24:8080/audio.wav
+```
+
+**`bullet_time` 配置：**
+
+| 配置项 | 默认值 | 含义 |
+|---|---|---|
+| `bullet_time.enabled` | `true` | 总开关（设置页可切换） |
+| `bullet_time.min_score` | `0.75` | 触发合成的最低 AI 评分（设置页滑杆） |
+| `bullet_time.duration_seconds` | `4` | 合成短片的时长（秒） |
+| `bullet_time.style` | `pingpong` | 角度序列风格：`pingpong` / `rotate` |
+| `bullet_time.virtual_mode` | `auto` | 单机位回退模式：`auto` / `real` / `virtual` |
+| `bullet_time.virtual_angles` | `8` | 单机位模式下虚拟视角的数量 |
+| `bullet_time.zoom_motion` | `true` | 每个角度内做缓慢推镜（zoompan，CPU 略增） |
+
+> 多机位子弹时间对存储和 WiFi 有要求——每台手机都在 7×24 录自己的角度；单台 P20 上，虚拟机位模式几乎不增加额外开销。
 
 ## 🔒 隐私与安全
 
@@ -174,6 +224,7 @@ P20 总共只有 64–128 GB 存储，所以默认只滚动保留 24 小时原�
 | `capture.source_url` | `http://127.0.0.1:8080/video` | 相机 App 的回环 MJPEG 视频流地址 |
 | `capture.segment_seconds` | 600 | 每个原始片段时长（秒） |
 | `capture.retention_hours` | 24 | 原始录像滚动保留窗口 |
+| `capture.cameras` | `[]` | 多机位列表：每台手机一条 `{name, url, audio_url}`；留空即单机位（见 [🎬 子弹时间](#-子弹时间)） |
 | `pipeline.run_interval_minutes` | 30 | 多久自动分析一批新片段 |
 | `pipeline.max_segments_per_run` | 8 | 每批最多处理几段（对手机和钱包都友好） |
 | `pipeline.min_highlight_score` | 0.55 | AI 打分达到多少才算高光 |
@@ -182,6 +233,13 @@ P20 总共只有 64–128 GB 存储，所以默认只滚动保留 24 小时原�
 | `ai.provider` | dashscope | `dashscope`/`openai`/`compatible`（任何 OpenAI 兼容接口） |
 | `ai.api_key` | 空 | 你的密钥；或环境变量 `VIVIDEYE_AI__API_KEY` |
 | `ai.vision_model` | qwen3-vl-flash | 负责看图打分的视觉大模型 |
+| `bullet_time.enabled` | `true` | 高分高光自动合成子弹时间（设置页可切换） |
+| `bullet_time.min_score` | 0.75 | 触发子弹时间的最低评分（设置页滑杆） |
+| `bullet_time.duration_seconds` | 4 | 子弹时间成片时长（秒） |
+| `bullet_time.style` | `pingpong` | 角度序列风格：`pingpong` / `rotate` |
+| `bullet_time.virtual_mode` | `auto` | 单机位回退模式：`auto` / `real` / `virtual` |
+| `bullet_time.virtual_angles` | 8 | 单机位虚拟视角数量 |
+| `bullet_time.zoom_motion` | `true` | 每个角度内缓慢推镜（zoompan） |
 | `storage.highlights_retention_days` | 30 | 非收藏高光保留天数（收藏永久） |
 | `storage.min_free_gb` | 2 | 录制暂停的剩余空间阈值 |
 | `server.port` | 8666 | 网页服务端口 |
@@ -190,8 +248,13 @@ P20 总共只有 64–128 GB 存储，所以默认只滚动保留 24 小时原�
 
 ## 🗺️ 路线图
 
-- 🎥 多机位：几台旧手机一起看，一面高光墙
-- 🕹️ 多视角"子弹时间"：房间四角多台设备多视角采集、分布式计算与存储，把某个高光时刻三维重建成 NBA"立体暂停"式的名场面
+**✅ 已完成**
+
+- 🎥 多机位（v0.2.0）—— 几台旧手机组成一个机位阵列（`capture.cameras`），配合 [🎬 子弹时间](#-子弹时间) 生成旋转视角高光
+
+**计划中**
+
+- 🕹️ 多视角"子弹时间"进阶版：跨设备分布式计算与存储，把高光时刻真正三维重建成 NBA"立体暂停"式名场面
 - 🧠 本地小模型：ONNX 端侧推理，更强的手机可完全离线
 - 📱 App 壳：给网页套个原生壳，桌面一点就开
 - 🌍 公网访问方案：整理一份安全的 Tailscale/WireGuard 远程访问指南

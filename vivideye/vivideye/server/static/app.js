@@ -352,6 +352,8 @@ function cardHTML(h) {
     .map((t) => `<span class="tag">${esc(t)}</span>`).join('');
   const score = Number(h.score) || 0;
   const ts = h.started_at || h.created_at || 0;
+  const btBadge = h.bullet_time_path
+    ? '<span class="bt-badge" title="已合成子弹时间短片">⚡ 子弹时间</span>' : '';
   return `
   <article class="card-hl" data-id="${esc(h.id)}">
     <div class="thumb-wrap">
@@ -359,6 +361,7 @@ function cardHTML(h) {
       <img class="thumb" src="/api/highlights/${esc(h.id)}/thumb"
            alt="缩略图" loading="lazy"
            onerror="this.classList.add('broken');this.onerror=null;">
+      ${btBadge}
       <span class="dur">${fmtClock(h.duration)}</span>
       <button class="fav-btn" data-fav="${esc(h.id)}" aria-label="收藏">
         ${h.favorite ? '❤️' : '🤍'}
@@ -408,6 +411,33 @@ function refreshFavUI(id, on) {
  * 视频播放弹层
  * ============================================================ */
 
+/* ---------- 播放弹层：子弹时间切换 ---------- */
+// 当前弹层是否正在播子弹时间短片（关闭弹层时复位）
+let btPlaying = false;
+
+/** 重置子弹时间按钮到初始态（"⚡ 播放子弹时间"） */
+function resetBtButton() {
+  btPlaying = false;
+  const btn = $('#player-bt');
+  btn.classList.remove('active');
+  btn.textContent = '⚡ 播放子弹时间';
+}
+
+/** 子弹时间 ⇄ 原视频 来回切换（仅对已合成子弹时间的高光可见） */
+function toggleBulletTime() {
+  const h = state.current;
+  if (!h || !h.bullet_time_path) return;
+  btPlaying = !btPlaying;
+  const video = $('#player-video');
+  video.src = btPlaying
+    ? `/api/highlights/${h.id}/bullettime`
+    : `/api/highlights/${h.id}/video`;
+  const btn = $('#player-bt');
+  btn.textContent = btPlaying ? '▶ 播放原视频' : '⚡ 播放子弹时间';
+  btn.classList.toggle('active', btPlaying);
+  video.play().catch(() => { /* 自动播放被拒时等用户手动点 */ });
+}
+
 function openPlayer(id) {
   const h = state.items.find((x) => x.id === id);
   if (!h) return;
@@ -415,6 +445,10 @@ function openPlayer(id) {
   $('#player-title').textContent = h.title || '未命名时刻';
   $('#player-caption').textContent = h.caption || '';
   $('#player-fav').textContent = h.favorite ? '❤️' : '🤍';
+
+  // 有子弹时间短片才显示切换按钮（bullet_time_path 为 null/空即未合成）
+  $('#player-bt').classList.toggle('hidden', !h.bullet_time_path);
+  resetBtButton();
 
   const video = $('#player-video');
   video.src = `/api/highlights/${h.id}/video`;
@@ -428,6 +462,7 @@ function closePlayer() {
   video.pause();
   video.removeAttribute('src');
   video.load(); // 释放连接，避免占用手机带宽
+  resetBtButton(); // esc/关闭时复位子弹时间切换状态
   state.current = null;
   $('#player-modal').classList.add('hidden');
   document.body.classList.remove('modal-open');
@@ -556,15 +591,26 @@ function applyConfigToUI() {
     (b) => b.classList.toggle('active', b.dataset.mode === scene));
   // AI 开关：配置缺省视为开启
   $('#ai-switch').checked = !(cfg.ai && cfg.ai.enabled === false);
+  // 子弹时间：开关缺省视为开启；阈值超出滑杆范围时回退 0.75
+  const bt = cfg.bullet_time || {};
+  $('#bt-switch').checked = bt.enabled !== false;
+  const ms = Number(bt.min_score);
+  const slider = $('#bt-min-score');
+  slider.value = (ms >= 0.6 && ms <= 0.95) ? ms : 0.75;
+  $('#bt-score-val').textContent = Number(slider.value).toFixed(2);
   $('#api-key').value = '';
 }
 
-/** 保存设置（场景模式 + AI 开关 + 可选的新 API Key） */
+/** 保存设置（场景模式 + AI 开关 + 子弹时间 + 可选的新 API Key） */
 async function saveConfig() {
   const sceneBtn = $('#scene-seg .seg-btn.active');
   const body = {
     pipeline: { scene_mode: sceneBtn ? sceneBtn.dataset.mode : 'auto' },
     ai: { enabled: $('#ai-switch').checked },
+    bullet_time: {
+      enabled: $('#bt-switch').checked,
+      min_score: Number($('#bt-min-score').value) || 0.75,
+    },
   };
   const key = $('#api-key').value.trim();
   if (key) body.ai.api_key = key; // 留空表示不修改密钥
@@ -646,6 +692,14 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#player-fav').addEventListener(
     'click', () => state.current && toggleFavorite(state.current.id));
   $('#player-del').addEventListener('click', deleteCurrent);
+  $('#player-bt').addEventListener('click', toggleBulletTime);
+  // esc 关闭弹层（与关闭按钮同样会复位子弹时间切换状态）
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape'
+        && !$('#player-modal').classList.contains('hidden')) {
+      closePlayer();
+    }
+  });
 
   // —— 实时画面 ——
   initLive();
@@ -666,6 +720,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#btn-save-config').addEventListener('click', saveConfig);
   $('#btn-run-pipeline').addEventListener('click', runPipelineNow);
+  // 子弹时间阈值滑杆：拖动时实时显示当前值
+  $('#bt-min-score').addEventListener('input', (e) => {
+    $('#bt-score-val').textContent = Number(e.target.value).toFixed(2);
+  });
 
   // —— 初始加载 ——
   loadStatus();

@@ -2,18 +2,20 @@
 """VividEye 命令行入口（运行在手机 Termux 中）。
 
 子命令：
-    start        启动全部常驻服务：循环录制 + 管线调度 + Web 服务器（可选）
+    start        启动全部常驻服务：循环录制（多机位）+ 管线调度 + Web 服务器（可选）
     process-now  立即处理一批待处理片段（不启动常驻服务）
     digest       生成“今日精选”Markdown 日报
     status       查看存储/磁盘/待处理状态快照
+    bullet-time  为指定高光渲染子弹时间环绕回放（多机位/虚拟机位）
 
 用法示例：
     python main.py start
     python main.py process-now
     python main.py digest --date 2026-09-02
     python main.py status
+    python main.py bullet-time <highlight_id>
 
-日志统一输出到 stderr；status 的结果同时打印到 stdout 方便查阅。
+日志统一输出到 stderr；status / bullet-time 的结果同时打印到 stdout 方便查阅。
 """
 
 from __future__ import annotations
@@ -38,14 +40,16 @@ _LOG_FORMAT = "%(asctime)s %(levelname)-7s [%(name)s] %(message)s"
 # start：常驻服务
 # ----------------------------------------------------------------------
 def cmd_start(args: argparse.Namespace) -> int:
-    from vivideye.capture.recorder import Recorder
+    from vivideye.capture.multi import MultiRecorder
     from vivideye.pipeline.orchestrator import PipelineService
     from vivideye.storage.db import HighlightsDB
     from vivideye.paths import resolve_path
     from vivideye.config import config
 
     db = HighlightsDB(resolve_path(config.get("storage.db_path", "data/vivideye.db")))
-    recorder = Recorder(db=db)
+    # MultiRecorder：capture.cameras 为空时回退单机位（行为与旧版
+    # Recorder 完全一致）；非空时每机位独立 ffmpeg 进程
+    recorder = MultiRecorder(db=db)
     service = PipelineService(db=db)
 
     # Web 服务器为可选组件：启动/探测失败只告警，不影响录制与管线
@@ -232,6 +236,53 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# bullet-time：为指定高光渲染子弹时间
+# ----------------------------------------------------------------------
+def cmd_bullet_time(args: argparse.Namespace) -> int:
+    from vivideye.bullettime import BulletTimeRenderer
+    from vivideye.config import config
+    from vivideye.paths import resolve_path
+    from vivideye.storage.db import HighlightsDB
+
+    db = HighlightsDB(resolve_path(config.get("storage.db_path", "data/vivideye.db")))
+    try:
+        hl = db.get_highlight(args.highlight_id)
+        if hl is None:
+            logger.error("未找到高光 %s（可用 main.py status 查看已有高光）",
+                         args.highlight_id)
+            return 1
+        if not bool(config.get("bullet_time.enabled", True)):
+            logger.warning("子弹时间未启用（bullet_time.enabled=false），已跳过")
+            return 1
+        min_score = float(config.get("bullet_time.min_score", 0.75))
+        score = float(hl.get("score") or 0.0)
+        if score < min_score:
+            logger.warning("高光分数 %.2f 低于子弹时间阈值 %.2f，已跳过"
+                           "（可调低 bullet_time.min_score）", score, min_score)
+            return 1
+
+        # 高光中点作为环绕中心
+        duration = float(hl.get("duration") or 0.0)
+        center = float(hl.get("started_at") or 0.0) + duration / 2.0
+        hl_dir = resolve_path(config.get("storage.highlights_dir",
+                                         "data/highlights"))
+        out = BulletTimeRenderer().auto_render(center, hl["id"], hl_dir)
+        if out is None:
+            logger.warning(
+                "子弹时间渲染失败：覆盖该时刻（%s）的原始片段可能已被保留期"
+                "清理（data/raw 默认只保留 capture.retention_hours 小时），"
+                "或渲染过程出错；详情见上方日志",
+                time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(center)))
+            return 1
+        db.set_bullet_time(hl["id"], str(out))
+        print(str(out))
+        logger.info("子弹时间成片：%s（已写入高光记录 bullet_time_path）", out)
+        return 0
+    finally:
+        db.close()
+
+
+# ----------------------------------------------------------------------
 # argparse 装配
 # ----------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
@@ -253,6 +304,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_status = sub.add_parser("status", help="查看存储/磁盘/待处理状态")
     p_status.set_defaults(func=cmd_status)
+
+    p_bt = sub.add_parser("bullet-time", help="为指定高光渲染子弹时间环绕回放")
+    p_bt.add_argument("highlight_id", metavar="HIGHLIGHT_ID",
+                      help="高光 ID（见 /api/highlights 或 DB）")
+    p_bt.set_defaults(func=cmd_bullet_time)
 
     return parser
 

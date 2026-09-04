@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/made_with-%F0%9F%92%9B-yellow" alt="Made with 💛">
 </p>
 
-**VividEye** turns an old Android phone (developed and tested on a Huawei P20) into an AI highlight camera for pet and family homes. It records 24/7, sends only sampled frames to a cloud VLM/LLM for scoring, keeps the moments worth keeping, and lets you browse everything from any device on your home WiFi — while every video file stays on the phone itself.
+**VividEye** turns an old Android phone (developed and tested on a Huawei P20) into an AI highlight camera for pet and family homes. It records 24/7, sends only sampled frames to a cloud VLM/LLM for scoring, keeps the moments worth keeping, and lets you browse everything from any device on your home WiFi — while every video file stays on the phone itself. Top-scoring moments are even auto-synthesized into **"bullet time"** rotating clips: park a few old phones around the room as a camera array and replay the jump from every angle.
 
 <p align="center">
   <video src="docs/promo_vivideye.mp4" controls muted playsinline width="800" poster="docs/promo_hero.jpg"></video>
@@ -44,6 +44,7 @@
 ┌──────────────────────────────┴───────────────────────────────┐
 │  Highlights library (mp4 + thumbnails + SQLite)               │
 │  Daily digest (Markdown, AI-written with local fallback)     │
+│  Bullet-time clips (rotating view, auto at score ≥ 0.75)     │
 │                              │                               │
 │                   FastAPI Web UI (:8666)                     │
 └──────────────────────────────┬───────────────────────────────┘
@@ -114,10 +115,59 @@ VividEye's "brain" is any OpenAI-compatible API — defaults to Alibaba Cloud Da
 Open `http://<phone-ip>:8666` from your phone, laptop, or TV browser:
 
 - **✨ Highlights wall** — cards with thumbnail, AI-written title, score, and tags; tap to play, ❤️ favorite, or 🗑️ delete
+- **⚡ Bullet time** — highlights scored ≥ 0.75 automatically get a rotating-view clip; look for the ⚡ badge on the card and the "Play bullet time" button in the player (see [🎬 Bullet Time](#-bullet-time))
 - **❤️ Favorites** — favorited highlights are never auto-deleted
 - **📹 Live view** — the current camera frame, proxied from the phone
 - **📖 Daily digest** — a short AI-written story of the day's best moments
-- **⚙️ Settings** — scene mode (auto / pet / kid / home), API key, and a **"Process now"** button that skips the 30-minute scheduler and analyzes the newest segments immediately
+- **⚙️ Settings** — scene mode (auto / pet / kid / home), API key, bullet-time switch & threshold, and a **"Process now"** button that skips the 30-minute scheduler and analyzes the newest segments immediately
+
+## 🎬 Bullet Time
+
+<p align="center">
+  <img src="docs/bullettime_hero.jpg" alt="Bullet time — a rotating-view clip synthesized around the best moment" width="800">
+</p>
+
+When the AI scores a segment **≥ 0.75**, VividEye automatically synthesizes a short **rotating-view "bullet time" clip** — an NBA-style freeze-frame sweep — around the longest AI-identified moment and attaches it to that highlight. Nothing to click, nothing to configure: the card gets a ⚡ badge and the player gets a **⚡ Play bullet time** toggle (press again to switch back to the original clip).
+
+**Trigger conditions (all must hold):**
+
+- `bullet_time.enabled` is on (default, switchable on the Settings page), **and**
+- the segment's AI score ≥ `bullet_time.min_score` (default `0.75`, slider on the Settings page), **and**
+- the AI returned at least one concrete `moments` window — the longest one is chosen as the rotation center.
+
+**What you get (honest version):**
+
+| Setup | Effect |
+|---|---|
+| **Multi-camera** — N old phones parked around the room (`capture.cameras`) | A true multi-angle sweep: the clip rotates across the different phones' viewpoints around the frozen moment |
+| **Single camera** (default) | A *virtual camera* sweep: the rotation is synthesized from digital zoom & pan on the one real angle. Looks great, but it is **not** a true 3D reconstruction — we'd rather say so plainly |
+
+**Multi-camera example** (`user_config.yaml`) — each extra phone runs Termux + IP Webcam just like the main one; its segments land in `data/raw/<name>/`:
+
+```yaml
+capture:
+  cameras:
+    - name: sofa-north        # any name, used for the segment folder and logs
+      url: http://192.168.1.23:8080/video    # that phone's IP Webcam stream
+      audio_url: null         # optional separate audio stream
+    - name: sofa-east
+      url: http://192.168.1.24:8080/video
+      audio_url: http://192.168.1.24:8080/audio.wav
+```
+
+**`bullet_time` settings:**
+
+| Key | Default | Meaning |
+|---|---|---|
+| `bullet_time.enabled` | `true` | Master switch (also on the Settings page) |
+| `bullet_time.min_score` | `0.75` | Minimum AI score to trigger synthesis (Settings-page slider) |
+| `bullet_time.duration_seconds` | `4` | Length of the synthesized clip |
+| `bullet_time.style` | `pingpong` | Angle-sequence style: `pingpong` / `rotate` |
+| `bullet_time.virtual_mode` | `auto` | Single-camera fallback: `auto` / `real` / `virtual` |
+| `bullet_time.virtual_angles` | `8` | Number of virtual viewpoints in single-camera mode |
+| `bullet_time.zoom_motion` | `true` | Slow zoom within each angle (zoompan; slightly more CPU) |
+
+> Multi-camera bullet time is storage- and WiFi-hungry — every phone records its own angle 24/7. On a single P20, the virtual mode costs almost nothing extra.
 
 ## 🔒 Privacy & Security
 
@@ -173,6 +223,7 @@ Copy [`config_template.yaml`](config_template.yaml) to `user_config.yaml` (git-i
 | `capture.source_url` | `http://127.0.0.1:8080/video` | Loopback MJPEG stream from the camera app |
 | `capture.segment_seconds` | 600 | Length of each raw segment |
 | `capture.retention_hours` | 24 | Rolling buffer window for raw footage |
+| `capture.cameras` | `[]` | Multi-camera array: one `{name, url, audio_url}` entry per extra phone; empty = single camera (see [🎬 Bullet Time](#-bullet-time)) |
 | `pipeline.run_interval_minutes` | 30 | How often new segments get analyzed |
 | `pipeline.max_segments_per_run` | 8 | Batch size per run (phone- and wallet-friendly) |
 | `pipeline.min_highlight_score` | 0.55 | Minimum AI score to save a highlight |
@@ -181,6 +232,13 @@ Copy [`config_template.yaml`](config_template.yaml) to `user_config.yaml` (git-i
 | `ai.provider` | dashscope | `dashscope` / `openai` / `compatible` (any OpenAI-style API) |
 | `ai.api_key` | — | Your key; or `VIVIDEYE_AI__API_KEY` |
 | `ai.vision_model` | qwen3-vl-flash | VLM doing the frame scoring |
+| `bullet_time.enabled` | `true` | Auto-synthesize bullet-time clips for top highlights (Settings page) |
+| `bullet_time.min_score` | 0.75 | Minimum AI score to trigger bullet time (Settings page) |
+| `bullet_time.duration_seconds` | 4 | Bullet-time clip length (seconds) |
+| `bullet_time.style` | `pingpong` | Angle-sequence style: `pingpong` / `rotate` |
+| `bullet_time.virtual_mode` | `auto` | Single-camera fallback: `auto` / `real` / `virtual` |
+| `bullet_time.virtual_angles` | 8 | Number of virtual viewpoints (single camera) |
+| `bullet_time.zoom_motion` | `true` | Slow zoom within each angle (zoompan) |
 | `storage.highlights_retention_days` | 30 | Non-favorite highlight lifetime (favorites forever) |
 | `storage.min_free_gb` | 2 | Free-space floor before recording pauses |
 | `server.port` | 8666 | Web UI port |
@@ -189,8 +247,13 @@ Full defaults live in [`vivideye/config.py`](vivideye/config.py).
 
 ## 🗺️ Roadmap
 
-- 🎥 Multi-camera support (several old phones, one wall of highlights)
-- 🕹️ Multi-view "bullet time": several devices in the corners of a room doing multi-angle capture with distributed compute/storage, reconstructing a highlight into an NBA-style 3D freeze-frame moment
+**✅ Shipped**
+
+- 🎥 Multi-camera support (v0.2.0) — several old phones form one camera array (`capture.cameras`); pair it with [🎬 Bullet Time](#-bullet-time) for rotating-view highlights
+
+**Planned**
+
+- 🕹️ Multi-view "bullet time", next level: distributed compute/storage across the devices and true 3D freeze-frame reconstruction of a highlight moment
 - 🧠 Local small models (ONNX) for fully offline inference on stronger phones
 - 📱 A thin app shell for the web UI
 - 🌍 Secure remote access recipe (Tailscale/WireGuard guide)

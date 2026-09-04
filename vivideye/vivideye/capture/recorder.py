@@ -87,11 +87,26 @@ class Recorder:
         ...
         rec.status()   # {"running": True, ...}
         rec.stop()
+
+    多机位（v0.2.0）::
+
+        rec = Recorder(db, name="cam1", out_dir=raw_root / "cam1")
+
+    - ``name``：机位名（默认 "main"，单机位），仅用于标识与多机位日志；
+    - ``out_dir``：片段输出目录。默认（None）保持旧行为——直接 flat 写
+      ``storage.raw_dir`` 下的 ``seg_*.mp4``；多机位由 MultiRecorder 传入
+      ``raw_dir/<name>`` 子目录。
     """
 
-    def __init__(self, db: Optional[HighlightsDB] = None, cfg: Config | None = None):
+    def __init__(self, db: Optional[HighlightsDB] = None, cfg: Config | None = None,
+                 name: str = "main", out_dir: str | Path | None = None):
         self._cfg = cfg or config
-        self.raw_dir = resolve_path(self._cfg.get("storage.raw_dir", "data/raw"), self._cfg)
+        self.name = str(name)
+        if out_dir is None:
+            self.raw_dir = resolve_path(
+                self._cfg.get("storage.raw_dir", "data/raw"), self._cfg)
+        else:
+            self.raw_dir = Path(out_dir)
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self._db = db if db is not None else HighlightsDB(
             resolve_path(self._cfg.get("storage.db_path", "data/vivideye.db"), self._cfg))
@@ -120,6 +135,9 @@ class Recorder:
         self._restart_not_before = 0.0
         # 状态心跳文件（黑盒bug2）：与 DB 同目录，供 Web 状态接口读取
         self._status_path = self._db.db_path.parent / "recorder.json"
+        # 多机位时由 MultiRecorder 聚合写心跳，单个 Recorder 不再各自
+        # 写同一文件（避免互相覆盖）；单机位保持旧行为（True）
+        self._status_enabled = True
 
         # 看门狗：跟踪“本次 ffmpeg 会话”正在写入的活跃文件
         self._baseline_names: set[str] = set()    # 本次 spawn 前已存在的文件（不算活跃）
@@ -410,6 +428,8 @@ class Recorder:
         暂停期间为 False，Web 端不会误报“录制中”。tmp + os.replace 原子写，
         读方永远不会看到半截 JSON。
         """
+        if not self._status_enabled:
+            return                          # 多机位：由 MultiRecorder 聚合写
         snapshot = self.status()
         snapshot["recording"] = bool(snapshot["running"]
                                      and snapshot["ffmpeg_pid"] is not None)

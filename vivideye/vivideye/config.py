@@ -46,6 +46,13 @@ DEFAULTS: dict[str, Any] = {
         "record_audio": True,
         "segment_seconds": 600,        # one file per 10 minutes
         "video_codec": "copy",         # copy | h264
+        # 多机位列表：每项 {"name": "cam1", "url": "http://ip:8080/video",
+        #                   "audio_url": null}
+        # - 为空（默认）时回退单机位：使用 capture.source_url，机位名 "main"，
+        #   片段仍 flat 写入 data/raw/seg_*.mp4（向后兼容）；
+        # - 非空时每个机位独立 ffmpeg 子进程与退避，片段写
+        #   data/raw/<name>/seg_*.mp4（子目录布局）。
+        "cameras": [],
         # 原始切片保留时长（小时）：原始片段体积 ≈ 摄像头码率 × 时长，
         # 是存储占用的大头。默认 24h 仅作为高光提取的时间窗口，过期自动
         # 删除；高光/收藏单独保存、不受此清理影响。P20 存储有限，建议
@@ -99,6 +106,21 @@ DEFAULTS: dict[str, Any] = {
         "digest_dir": "data/digests",
         "min_free_gb": 2,              # pause recording below this free space
         "highlights_retention_days": 30,  # delete non-favorite highlights older than N days
+    },
+    # ------------------------------------------------------------------
+    # Bullet time (多机位回放 / 单机位虚拟机位环绕)
+    # ------------------------------------------------------------------
+    "bullet_time": {
+        "enabled": True,              # 总开关：关闭后 CLI/自动流程跳过渲染
+        "min_score": 0.75,            # 仅对 score >= 该阈值的高光渲染
+        "virtual_angles": 8,          # 单机位虚拟机位角度数
+        "virtual_mode": "auto",       # auto | real | virtual
+                                      #   auto: >=2 真机位用真帧，1 机位合成虚拟角度
+                                      #   real: 只用真机位帧（<2 帧不渲染）
+                                      #   virtual: 强制虚拟机位合成
+        "duration_seconds": 4,        # 成片时长（秒）
+        "style": "pingpong",          # pingpong | rotate（角度序列风格）
+        "zoom_motion": True,          # 每个角度内做缓慢推镜（zoompan）
     },
     # ------------------------------------------------------------------
     # Web server (runs on the phone; LAN devices browse to it)

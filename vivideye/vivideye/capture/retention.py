@@ -57,6 +57,13 @@ def disk_ok(path: str | Path, min_free_gb: float) -> bool:
 def clean_expired(raw_dir: str | Path, retention_hours: float) -> tuple[int, int]:
     """删除 raw 目录中修改时间早于保留期的片段。
 
+    兼容两种布局（v0.2.0 多机位）：
+    - flat：``data/raw/seg_*.mp4``（单机位，旧版布局）；
+    - 子目录：``data/raw/<cam>/seg_*.mp4``（多机位，一层子目录）。
+
+    只处理 ``seg_`` 前缀的 ``.mp4`` 片段文件；子目录内的其他文件以及
+    raw 目录下的其他目录/文件一律不碰。
+
     返回 ``(删除文件数, 释放字节数)``。数据库中的 segments 记录保留不动，
     管线遇到已消失的文件会自然标记 failed，不阻塞流程。
     """
@@ -64,7 +71,8 @@ def clean_expired(raw_dir: str | Path, retention_hours: float) -> tuple[int, int
     cutoff = time.time() - float(retention_hours) * 3600.0
     deleted, freed = 0, 0
     try:
-        candidates = list(raw_dir.glob("seg_*.mp4"))
+        candidates = list(raw_dir.glob("seg_*.mp4"))        # flat 布局
+        candidates += list(raw_dir.glob("*/seg_*.mp4"))     # 多机位子目录布局
     except OSError:
         logger.warning("无法扫描 raw 目录：%s", raw_dir)
         return 0, 0

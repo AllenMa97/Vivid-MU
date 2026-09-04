@@ -301,6 +301,24 @@ img { max-width: 100%; }
 
 .fav-btn:active { transform: scale(1.2); }
 
+/* 子弹时间徽章（缩略图左上角，珊瑚橙描边，与 tags 徽章同族） */
+.bt-badge {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 3;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--accent-deep);
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--accent);
+  padding: 2px 8px;
+  border-radius: 999px;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  white-space: nowrap;
+}
+
 /* 卡片文字区 */
 .card-body {
   padding: 10px 12px 12px;
@@ -594,6 +612,21 @@ img { max-width: 100%; }
 
 .switch input:checked + .slider::before { transform: translateX(22px); }
 
+/* 滑杆行（设置页：子弹时间触发阈值等） */
+.slider-row { margin-top: 16px; }
+
+.slider-row .row-title { font-size: 0.9rem; font-weight: 700; margin-bottom: 10px; }
+
+.slider-row .row-title .val { color: var(--accent-deep); }
+
+.slider-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.slider-row .card-sub { margin-top: 6px; }
+
 .pipeline-status {
   margin-top: 10px;
   text-align: center;
@@ -667,6 +700,14 @@ img { max-width: 100%; }
 .icon-btn:active { transform: scale(0.9); }
 
 .icon-btn.danger { background: #FDE7E7; }
+
+/* 子弹时间切换按钮的"正在播放"态（珊瑚橙填充） */
+#player-bt.active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 4px 12px rgba(255, 112, 67, 0.35);
+}
 
 /* ---------- 底部 Tab 栏 ---------- */
 .tabbar {

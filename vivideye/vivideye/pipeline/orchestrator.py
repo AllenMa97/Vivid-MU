@@ -8,7 +8,12 @@
 4. score >= ``pipeline.min_highlight_score`` 时，用 ffmpeg 按 moments
    给出的起止秒剪辑高光片段（stream copy，MJPEG 全关键帧所以切割精确）
    并生成缩略图，写入 highlights 目录；
-5. ``add_highlight`` 入库，片段标记 done；任何一步失败标记 failed。
+5. ``add_highlight`` 入库，片段标记 done；任何一步失败标记 failed；
+6. 入库后若 ``bullet_time.enabled`` 且 score >= ``bullet_time.min_score``
+   且 AI 给出了 moments，取最长 moment 的中心时刻交给
+   ``vivideye.bullettime`` 合成"子弹时间"短片并 ``set_bullet_time``
+   入库——该模块由并行开发、延迟导入，任何失败只打 warning，
+   绝不影响主管线。
 
 健壮性约定：
 - AI 模块由并行开发，采用**延迟导入**：只在真正调用时 import，
@@ -356,6 +361,13 @@ class PipelineService:
             moments = [(0.0, end)]
             logger.info("AI 未给出 moments，兜底截取 %.0f-%.0f 秒", 0.0, end)
 
+        # 子弹时间锚点：AI 给出的 moments 里取 (end-start) 最长的一个，
+        # 其导出的高光将附加旋转视角短片。兜底 moment 不参与——子弹
+        # 时间需要 AI 明确识别出的精彩时刻才有环绕的价值。
+        bt_moment = (max(moments, key=lambda m: m[1] - m[0])
+                     if info["moments"] else None)
+        bt_done = False
+
         base_time = datetime.fromtimestamp(
             float(seg.get("started_at") or time.time())).strftime("%Y%m%d_%H%M%S")
         seg_id = seg.get("id") or ""
@@ -370,7 +382,7 @@ class PipelineService:
             except PipelineError:
                 logger.exception("高光剪辑失败：%s %.1f-%.1fs", seg_path.name, start, end)
                 continue
-            self._db.add_highlight(
+            hid = self._db.add_highlight(
                 video_path=str(out_video),
                 segment_id=seg_id or None,
                 thumb_path=str(out_thumb),
@@ -385,4 +397,44 @@ class PipelineService:
             made += 1
             logger.info("导出高光：%s（%.1f-%.1fs，score=%.2f）",
                         out_video.name, start, end, info["score"])
+            # 子弹时间只挂在锚点 moment 对应的那条高光上（一个片段至多一次）
+            if bt_moment is not None and not bt_done and (start, end) == bt_moment:
+                bt_done = True
+                self._try_bullet_time(seg_path, hid, bt_moment, hl_dir,
+                                      info["score"])
         return made
+
+    # ------------------------------------------------------------------
+    # 子弹时间（可选增强，失败绝不影响主管线）
+    # ------------------------------------------------------------------
+    def _try_bullet_time(self, seg_path: Path, hid: str,
+                         moment: tuple[float, float], hl_dir: Path,
+                         score: float) -> None:
+        """尝试为高光 ``hid`` 合成"子弹时间"旋转视角短片。
+
+        上游契约（``vivideye.bullettime``，与 AI 模块一样由并行开发）：
+
+        - ``BulletTimeRenderer().auto_render(center_ts, hid, highlights_dir)``
+          围绕中心时刻合成短片，返回成片 ``Path``（放弃时 ``None``）；
+        - ``parse_segment_start(段路径)`` 从 ``seg_YYYYmmdd_HHMMSS.mp4``
+          文件名解析片段起始 epoch；
+        - ``db.set_bullet_time(hid, path)`` 把成片路径写回高光记录。
+
+        中心时刻 = 片段起始 epoch + moment 中点。模块缺失 / 渲染失败 /
+        入库失败一律只打 warning 跳过——高光本身已经完整落库。
+        """
+        try:
+            if not self._cfg.get("bullet_time.enabled"):
+                return
+            if score < float(self._cfg.get("bullet_time.min_score", 0.75)):
+                return
+            from vivideye.bullettime import BulletTimeRenderer  # 延迟导入（勿上移）
+            from vivideye.bullettime.renderer import parse_segment_start
+            center = float(parse_segment_start(seg_path)) \
+                + (moment[0] + moment[1]) / 2.0
+            out = BulletTimeRenderer().auto_render(center, hid, hl_dir)
+            if out is not None:
+                self._db.set_bullet_time(hid, str(out))
+                logger.info("子弹时间合成完成：highlight=%s -> %s", hid, out)
+        except Exception as e:  # noqa: BLE001 —— 子弹时间失败绝不拖垮主管线
+            logger.warning("子弹时间合成失败（已跳过，不影响主管线）：%s", e)

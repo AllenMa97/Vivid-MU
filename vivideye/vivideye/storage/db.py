@@ -7,12 +7,15 @@ server (reads). Keep the schema additive-only unless migrating.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 _SCHEMA = """
@@ -39,6 +42,7 @@ CREATE TABLE IF NOT EXISTS highlights (
     started_at REAL DEFAULT 0,
     duration REAL DEFAULT 0,
     favorite INTEGER DEFAULT 0,
+    bullet_time_path TEXT,            -- 子弹时间成片路径（bullet-time 渲染产物）
     created_at REAL DEFAULT (strftime('%s','now'))
 );
 
@@ -70,7 +74,21 @@ class HighlightsDB:
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """增量 schema 迁移（幂等，可对同一库重复执行）。
+
+        旧库的 highlights 表由 CREATE TABLE IF NOT EXISTS 保持原样，
+        需要在这里检测缺失列并 ALTER TABLE 补齐。
+        """
+        cols = [r["name"] for r in
+                self._conn.execute("PRAGMA table_info(highlights)").fetchall()]
+        if cols and "bullet_time_path" not in cols:
+            self._conn.execute(
+                "ALTER TABLE highlights ADD COLUMN bullet_time_path TEXT")
+            logger.info("已为旧库 highlights 表补充 bullet_time_path 列")
 
     # ------------------------------------------------------------------
     # segments
@@ -172,10 +190,18 @@ class HighlightsDB:
 
     def set_favorite(self, hid: str, favorite: bool):
         with self._lock:
-            self._conn.execute(
-                "UPDATE highlights SET favorite=? WHERE id=?",
-                (1 if favorite else 0, hid))
+            self._conn.execute("UPDATE highlights SET favorite=? WHERE id=?",
+                               (1 if favorite else 0, hid))
             self._conn.commit()
+
+    def set_bullet_time(self, hid: str, path: str | Path) -> int:
+        """记录高光的子弹时间成片路径，返回更新行数（0=hid 不存在）。"""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE highlights SET bullet_time_path=? WHERE id=?",
+                (str(path), hid))
+            self._conn.commit()
+            return cur.rowcount
 
     def delete_highlight(self, hid: str):
         with self._lock:

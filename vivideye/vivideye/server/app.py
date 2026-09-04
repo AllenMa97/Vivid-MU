@@ -46,8 +46,11 @@ _MASK = "******"
 # /api/config 允许写入的顶层配置段（白名单，防止脏数据入库）。
 # 收紧到键级（S3）：storage.* 与 ai.api_base / ai.provider 等敏感字段一律
 # 只读——GET 仍可展示，POST 一律忽略并在响应里提示；ai 段仅 api_key 可写。
+# bullet_time 段同理仅 enabled / min_score 可写（设置页的两个控件），
+# style / virtual_mode 等高级项请直接编辑 user_config.yaml。
 _ALLOWED_SECTIONS = {"app", "capture", "pipeline", "server"}
 _AI_WRITABLE_KEYS = {"api_key"}
+_BULLETTIME_WRITABLE_KEYS = {"enabled", "min_score"}
 
 # 合法的场景模式
 _SCENE_MODES = {"auto", "pet", "kid", "home"}
@@ -406,7 +409,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="VividEye",
         description="家庭高光相机 Web 服务（高光墙 / 实时画面 / 日报 / 设置）",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
     )
 
@@ -490,7 +493,7 @@ def create_app() -> FastAPI:
         """删除高光：仅清理位于高光目录内的媒体文件（安全边界），再删记录。"""
         h = _require_highlight(request, hid)
         hl_root: Path = request.app.state.highlights_dir.resolve()
-        for key in ("video_path", "thumb_path"):
+        for key in ("video_path", "thumb_path", "bullet_time_path"):
             raw = h.get(key)
             if not raw:
                 continue
@@ -520,6 +523,21 @@ def create_app() -> FastAPI:
         if not raw or not Path(raw).is_file():
             raise HTTPException(status_code=404, detail="缩略图不存在")
         return FileResponse(Path(raw), media_type="image/jpeg")
+
+    @app.get("/api/highlights/{hid}/bullettime")
+    def api_highlight_bullettime(hid: str, request: Request) -> FileResponse:
+        """返回高光的"子弹时间"旋转视角短片（未合成过则 404）。
+
+        ``bullet_time_path`` 由 pipeline 在高光入库后调用
+        ``db.set_bullet_time`` 写入；高光列表接口经 SELECT * 自动透出，
+        前端据其 truthy 判断是否展示 ⚡ 徽章与切换按钮。
+        """
+        h = _require_highlight(request, hid)
+        raw = h.get("bullet_time_path")
+        if not raw or not Path(raw).is_file():
+            raise HTTPException(status_code=404, detail="子弹时间短片不存在（未合成或已被清理）")
+        path = Path(raw)
+        return FileResponse(path, media_type="video/mp4", filename=path.name)
 
     # ------------------------------------------------------------------
     # 日报
@@ -588,6 +606,16 @@ def create_app() -> FastAPI:
                         updates["ai"] = kept
                 else:
                     ignored.append("ai")
+            elif section == "bullet_time":
+                if isinstance(body, dict):
+                    kept = {k: v for k, v in body.items()
+                            if k in _BULLETTIME_WRITABLE_KEYS}
+                    ignored += [f"bullet_time.{k}" for k in body
+                                if k not in _BULLETTIME_WRITABLE_KEYS]
+                    if kept:
+                        updates["bullet_time"] = kept
+                else:
+                    ignored.append("bullet_time")
             else:
                 ignored.append(str(section))
 
@@ -599,6 +627,16 @@ def create_app() -> FastAPI:
         if scene is not None and scene not in _SCENE_MODES:
             raise HTTPException(status_code=400,
                                 detail=f"scene_mode 仅支持 {' / '.join(sorted(_SCENE_MODES))}")
+        # 子弹时间阈值合法性校验（必须是 0~1 的数字）
+        bt_score = (updates.get("bullet_time") or {}).get("min_score")
+        if bt_score is not None:
+            try:
+                bt_val = float(bt_score)
+            except (TypeError, ValueError):
+                bt_val = -1.0
+            if not (0.0 <= bt_val <= 1.0):
+                raise HTTPException(status_code=400,
+                                    detail="bullet_time.min_score 必须是 0~1 之间的数字")
         if not updates:
             message = "没有可更新的配置项"
             if ignored:

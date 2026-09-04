@@ -120,6 +120,27 @@
     </div>
 
     <div class="card">
+      <h3 class="card-title">⚡ 子弹时间</h3>
+      <p class="card-sub">高分高光自动合成一段旋转视角短片，多机位时环绕效果更佳</p>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-title">自动合成子弹时间</div>
+          <div class="card-sub">关闭后不再为新的高光合成子弹时间</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="bt-switch" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="slider-row">
+        <div class="row-title">触发分数阈值 <span class="val" id="bt-score-val">0.75</span></div>
+        <input type="range" id="bt-min-score" min="0.6" max="0.95" step="0.05" value="0.75"
+               aria-label="子弹时间触发分数阈值">
+        <div class="card-sub">AI 评分不低于该阈值的高光才会合成子弹时间</div>
+      </div>
+    </div>
+
+    <div class="card">
       <h3 class="card-title">🔑 API Key</h3>
       <p class="card-sub">用于云端大模型分析（如 DashScope），保存在手机本地</p>
       <input type="password" id="api-key" class="input" autocomplete="off"
@@ -136,7 +157,7 @@
 
     <div class="card">
       <h3 class="card-title">ℹ️ 关于</h3>
-      <p class="card-sub">VividEye v0.1.0 · 旧手机变身 AI 高光相机<br>局域网访问 · 数据不出家门</p>
+      <p class="card-sub">VividEye v0.2.0 · 旧手机变身 AI 高光相机<br>局域网访问 · 数据不出家门</p>
     </div>
   </section>
 </main>
@@ -153,6 +174,7 @@
         <button class="icon-btn" id="player-fav" title="收藏">🤍</button>
         <button class="icon-btn danger" id="player-del" title="删除">🗑️</button>
         <span class="spacer"></span>
+        <button class="btn ghost small hidden" id="player-bt" title="切换子弹时间短片">⚡ 播放子弹时间</button>
         <button class="btn ghost" id="player-close">关闭</button>
       </div>
     </div>
